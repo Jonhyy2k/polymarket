@@ -1,0 +1,136 @@
+{
+    "min_edge_threshold_bps": 0,
+    "taker_fee_bps": 100,
+    "summary_interval_seconds": 60,
+    "warmup_seconds": 0,
+    "log_file": "logs/arb_live.csv",
+    "near_miss_log_file": "logs/near_miss_live.csv",
+    "replay_log_file": "logs/replay_live.csv",
+    "ping_interval_seconds": 15,
+    "stale_feed_timeout_seconds": 30,
+    "reconnect_max_delay_seconds": 30,
+    "message_queue_capacity": 128,
+    "metrics_queue_capacity": 8192,
+    "opportunity_queue_capacity": 1024,
+    "replay_queue_capacity": 8192,
+    "active_market_report_limit": 10,
+    "custom_feature_enabled": true,
+    "initial_dump": true,
+    "metrics_enabled": true,
+    "edge_telemetry_enabled": true,
+    "replay_logging_enabled": true,
+    "hot_path_logging": false,
+    "flush_csv_each_write": false,
+    "fetch_market_metadata": true,
+    "enable_group_arbitrage": true,
+    "auto_detect_exhaustive_groups": true,
+    "maker_arb_enabled": true,
+    "pin_thread_cpu": -1,
+    "receiver_cpu": 2,
+    "parser_cpu": 4,
+    "logger_cpu": 6,
+    "lock_memory": false,
+    "prefault_stack_kb": 64,
+    "realtime_priority": 0,
+    "receiver_priority": 0,
+    "parser_priority": 0,
+    "logger_priority": 0,
+    "contracts": [
+        {
+            "name": "Bitcoin Up or Down - June 13, 12PM ET",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "78819055072863903916585144138405675908178853925452224216335706141565219856185",
+            "token_id_no": "113908526171464284561006410923294896193478487621414778608875107295578155664925"
+        },
+        {
+            "name": "Bitcoin Up or Down - June 13, 12:45PM-1:00PM ET",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "99023730880516225802175935801450458107269191988484510344260489221393453076430",
+            "token_id_no": "62631431752099378095187076647850761467308675057745370975059544992265522120116"
+        },
+        {
+            "name": "Will Bitcoin dip to $63,000 on June 13?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "6884220321210878191641242727826298485470166982463217791610755769387488569214",
+            "token_id_no": "6366496605078448401421983015184348305366857446557517792005471879319665229229"
+        },
+        {
+            "name": "Will Bitcoin reach $65,000 on June 13?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "27590517731148976388381219275592113739710277821006407405960995606542468299407",
+            "token_id_no": "72278723732467807482262858229732081155099642336825840438078577696316248171506"
+        },
+        {
+            "name": "Will Ethereum reach $1,700 on June 13?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "107080681307371375678717068233422590704790219778992975164834852196239458085692",
+            "token_id_no": "39634093182770040546794881881713534246151126328875046056269476140344511025839"
+        },
+        {
+            "name": "Bitcoin Up or Down on June 14?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "5899295666205456225720137274645776975430358870900871513946721099423308686177",
+            "token_id_no": "8257977891786439186217615380527962801950763048802789780278639140636047288388"
+        },
+        {
+            "name": "Will the price of Bitcoin be above $66,000 on June 14?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "95567778618958580593784330597493132194020217555792365697255759191887064368429",
+            "token_id_no": "43832470963275804744312548172515887852726751965235636037128712499341431622051"
+        },
+        {
+            "name": "Will the price of Bitcoin be above $62,000 on June 14?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "24263007049311544381149874427246491010362852457986556661717075902445320044187",
+            "token_id_no": "41864523372202600045662802580468115995435401217414770171466940334945492803241"
+        },
+        {
+            "name": "Will the price of Bitcoin be above $64,000 on June 14?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "6023564916909538396287403142815490796285739586329855294484240466650852817010",
+            "token_id_no": "18485469840862733377815375691536799288741919334754043355477488848197934906536"
+        },
+        {
+            "name": "Will the price of Ethereum be above $1,700 on June 14?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "36256115364916579056877388724215172638225552418908704168852875433423495541304",
+            "token_id_no": "7555104972874237650729549569998068314206644672130471607965421744093197753633"
+        },
+        {
+            "name": "Will Bitcoin reach $66,000 June 8-14?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "100047939745574032075369460025777933616287081160851953158931940615526370191201",
+            "token_id_no": "18991907042581795784167442372659715442886847483738401225641339736560357532697"
+        },
+        {
+            "name": "Will Ethereum reach $1,800 June 8-14?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "77842541398842768097422974498583410204186463236514810076681749528277884260471",
+            "token_id_no": "28845727113603414428253928617732787507505831615551930595402103616808521794307"
+        },
+        {
+            "name": "Will Ethereum dip to $1,600 June 8-14?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "107746806090606875438733133872157076019107847486817097120054686059872809252525",
+            "token_id_no": "66729230174420613358426094541660620090232107774526484775755683014681626057386"
+        },
+        {
+            "name": "Will the price of Bitcoin be above $68,000 on June 15?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "78758869381364259854159889398585634509371909763020187876374890357059117129598",
+            "token_id_no": "41451856579527684231317477410363671100798377769322956673968392384534241453466"
+        },
+        {
+            "name": "Will the price of Bitcoin be above $60,000 on June 16?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "13858507055527326815729472575251545023536150906906995927442233633255154981689",
+            "token_id_no": "72856643110015191498569833891446508532628556109836397249922585942203683272033"
+        },
+        {
+            "name": "Will the price of Bitcoin be above $66,000 on June 16?",
+            "condition_id": "0x2256da8bce0446765dac4cb9b9ec3180811047f901cd37c6483d4d834c923fc2",
+            "token_id_yes": "6647501854845530347605917501579561408693695335646255110646724394179894868555",
+            "token_id_no": "21257875649425928764577924120242023978805109669144868937752218845350215127638"
+        }
+    ]
+}

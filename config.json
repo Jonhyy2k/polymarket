@@ -1,0 +1,100 @@
+{
+    "min_edge_threshold_bps": 0,
+    "taker_fee_bps": 100,
+    "summary_interval_seconds": 60,
+    "warmup_seconds": 0,
+    "log_file": "logs/arb_log.csv",
+    "near_miss_log_file": "logs/near_miss.csv",
+    "replay_log_file": "logs/replay_log.csv",
+    "ping_interval_seconds": 15,
+    "stale_feed_timeout_seconds": 30,
+    "reconnect_max_delay_seconds": 30,
+    "message_queue_capacity": 128,
+    "metrics_queue_capacity": 8192,
+    "opportunity_queue_capacity": 1024,
+    "replay_queue_capacity": 8192,
+    "active_market_report_limit": 10,
+    "custom_feature_enabled": true,
+    "initial_dump": true,
+    "metrics_enabled": true,
+    "edge_telemetry_enabled": true,
+    "replay_logging_enabled": true,
+    "hot_path_logging": false,
+    "flush_csv_each_write": false,
+    "fetch_market_metadata": true,
+    "enable_group_arbitrage": true,
+    "auto_detect_exhaustive_groups": true,
+    "maker_arb_enabled": true,
+    "pin_thread_cpu": -1,
+    "receiver_cpu": 2,
+    "parser_cpu": 4,
+    "logger_cpu": 6,
+    "lock_memory": false,
+    "prefault_stack_kb": 64,
+    "realtime_priority": 0,
+    "receiver_priority": 0,
+    "parser_priority": 0,
+    "logger_priority": 0,
+    "contracts": [
+        {
+            "name": "FED-DECREASE-50BPS-APR26",
+            "condition_id": "0xd72622d154dfe65b9c019d6afcfe75a55717e5c502db611f555b101aafbf6ec5",
+            "token_id_yes": "18690049947242812495755151360212639738977254879109748949267393375856311641700",
+            "token_id_no": "44217754360633979680316989769899520588351517398269898942558308875588541304698"
+        },
+        {
+            "name": "FED-DECREASE-25BPS-APR26",
+            "condition_id": "0x0d14f5dc9fb3250ec888b1ac8d9fe9a0ce06f9d3ea60fdf138e8690622fea84c",
+            "token_id_yes": "83479140651306794046790588004449066364152228067472874205697111967337978544729",
+            "token_id_no": "86189905157402748775272356734086074576046362545577080735663677743589826713172"
+        },
+        {
+            "name": "FED-NO-CHANGE-APR26",
+            "condition_id": "0x36e8ca24d2a13435f519f15580d42b45cdbe3bc425fb39a7c2733260357af0fa",
+            "token_id_yes": "63586620628756015058616403521099137018911742768824051367331188904593189743777",
+            "token_id_no": "31766935524058663070405983804663917978960087327501512757848582448134393241922"
+        },
+        {
+            "name": "FED-INCREASE-25BPS-APR26",
+            "condition_id": "0xd4d00e5bf8b960cc37c74c1ec19e41e00b0706add203ddcfbb65ad006c5c223a",
+            "token_id_yes": "9556122149160720922715284597610520228366807023831966638741974320131898296289",
+            "token_id_no": "30695356184876659373803609107050405812738015124680927512315982415984867952338"
+        },
+        {
+            "name": "FAMALICAO-WIN-APR10-2026",
+            "condition_id": "0x2bbdc81813ccb02636160847734b2c43beee4fedf936dba05f52a6cb42b4553a",
+            "token_id_yes": "104360508811922884870876339821232503558759327048056052647388574347860848319495",
+            "token_id_no": "91249821244288871920009642146013291680718535604659066787307610298950435558010"
+        },
+        {
+            "name": "FAMALICAO-MOREIRENSE-DRAW-APR10-2026",
+            "condition_id": "0xc4c0d56edddcdd8a2d34433211493e0f0d67bf77e11f9a44e751755e727ec9a9",
+            "token_id_yes": "14005922966306419840511488881205358000068558835763295925143341102018435860542",
+            "token_id_no": "57149791453128206519284890602652573275360618864786822082816832518082544264149"
+        },
+        {
+            "name": "MOREIRENSE-WIN-APR10-2026",
+            "condition_id": "0xfd56622a82ede5f8a4e47ffe39eba29f0d23a5b9ec7845e20956a66f8048e5c3",
+            "token_id_yes": "13873842224785140616529246906168612314195480942506183062678501124392147465612",
+            "token_id_no": "108071825648823101431765845810747461452565950685756808694051676884662849824926"
+        },
+        {
+            "name": "WBA-WIN-APR11-2026",
+            "condition_id": "0xdbafba87c4fad8dd11f26bef9b5ecf5a499e88411803fdbf2a7ed8059fff9a68",
+            "token_id_yes": "6092120755377849693743203702361978102749581230253409099952429489460686498503",
+            "token_id_no": "76070995290502549009709824432729877728333978297261390748948307121252653736788"
+        },
+        {
+            "name": "WBA-MILLWALL-DRAW-APR11-2026",
+            "condition_id": "0x1cd990c163e363eb4442d9f18dfbf730d0b7a7cca73a1757ff066a0147040f11",
+            "token_id_yes": "1129457264248754032318516072842458363540913836928745355196793090388761923965",
+            "token_id_no": "51553571308666278557484378048146484574625010761252210624449378285373792043583"
+        },
+        {
+            "name": "MILLWALL-WIN-APR11-2026",
+            "condition_id": "0xe0d69c0a8aa8a038182ea20aef5ca0a4635bfed3bdb7e11dfcdd78d0f28499df",
+            "token_id_yes": "46362366318605347488316856385439907266934970428657028904432561287902691844531",
+            "token_id_no": "85953860083423614714513416251269495270661617937733010830704708001250991502114"
+        }
+    ]
+}

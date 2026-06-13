@@ -1,0 +1,217 @@
+{
+    "min_edge_threshold_bps": 0,
+    "taker_fee_bps": 100,
+    "summary_interval_seconds": 60,
+    "warmup_seconds": 20,
+    "log_file": "logs/arb-config.neg_risk_active.csv",
+    "near_miss_log_file": "logs/near-miss-config.neg_risk_active.csv",
+    "replay_log_file": "logs/replay-config.neg_risk_active.csv",
+    "ping_interval_seconds": 15,
+    "stale_feed_timeout_seconds": 30,
+    "reconnect_max_delay_seconds": 30,
+    "message_queue_capacity": 256,
+    "metrics_queue_capacity": 32768,
+    "opportunity_queue_capacity": 4096,
+    "replay_queue_capacity": 8192,
+    "active_market_report_limit": 10,
+    "custom_feature_enabled": true,
+    "initial_dump": true,
+    "metrics_enabled": true,
+    "edge_telemetry_enabled": false,
+    "replay_logging_enabled": false,
+    "hot_path_logging": false,
+    "flush_csv_each_write": false,
+    "fetch_market_metadata": false,
+    "enable_group_arbitrage": true,
+    "auto_detect_exhaustive_groups": false,
+    "maker_arb_enabled": false,
+    "pin_thread_cpu": -1,
+    "receiver_cpu": 2,
+    "parser_cpu": 4,
+    "logger_cpu": 6,
+    "lock_memory": false,
+    "prefault_stack_kb": 64,
+    "realtime_priority": 0,
+    "receiver_priority": 0,
+    "parser_priority": 0,
+    "logger_priority": 0,
+    "groups": [
+        {
+            "key": "lal-sev-mad-2026-04-11",
+            "display_name": "lal-sev-mad-2026-04-11",
+            "exhaustive": true,
+            "condition_ids": [
+                "0xb973b6f9a4c0195df86c56478a1407e897fdcb9bd97d35ffb9322dd78e41ebb5",
+                "0x75453e6d6a13cefa7d3dc58e0f2b6221cf4d6f775c5e5bacda58a34bbfc05fe6",
+                "0xa2527fe14a2261e6ac08a58c01f420531da6070cec3d8df26f75251abab37020"
+            ]
+        },
+        {
+            "key": "fed-decision-in-april",
+            "display_name": "fed-decision-in-april",
+            "exhaustive": true,
+            "condition_ids": [
+                "0xd72622d154dfe65b9c019d6afcfe75a55717e5c502db611f555b101aafbf6ec5",
+                "0x0d14f5dc9fb3250ec888b1ac8d9fe9a0ce06f9d3ea60fdf138e8690622fea84c",
+                "0x36e8ca24d2a13435f519f15580d42b45cdbe3bc425fb39a7c2733260357af0fa",
+                "0xd4d00e5bf8b960cc37c74c1ec19e41e00b0706add203ddcfbb65ad006c5c223a"
+            ]
+        },
+        {
+            "key": "mls-por-laf-2026-04-11",
+            "display_name": "mls-por-laf-2026-04-11",
+            "exhaustive": true,
+            "condition_ids": [
+                "0xbdf5381d6b17a31a6237187f8c1933f098848f048f962511c6fc4189ee33f05c",
+                "0xb2205d6017a318931889fb9b837b7aac85015cb2b03cf64db3c0aed7416e4a36",
+                "0xb2509dd7f349b7e01101500f916a86df79ac1580c74fba7f456a5eefdaa76764"
+            ]
+        },
+        {
+            "key": "mls-aus-lag-2026-04-11",
+            "display_name": "mls-aus-lag-2026-04-11",
+            "exhaustive": true,
+            "condition_ids": [
+                "0xf5c7c91a181c647b19faae9d7bda82e06e206a4fa6501f2aa7ff0c68ff343208",
+                "0xb8d785bd9aba93644d2bce0a1ce987ce2a8282ae60e5f3a8cfa39e943857e795",
+                "0x12403c70e6765cb3d248d9a87089bdd484ef3dd56de4030288df0d6e36f4eff7"
+            ]
+        },
+        {
+            "key": "sea-ata-juv-2026-04-11",
+            "display_name": "sea-ata-juv-2026-04-11",
+            "exhaustive": true,
+            "condition_ids": [
+                "0x44a1ff474156122b04bbce985d106e21040c044c6035487e99e6803ebf3bc64f",
+                "0x6e4c0abe426046172aad25a959f38007cc3b5499e30af8dc7b944be3d805aeef",
+                "0x81535e2f33efe74d777e7d87bbaabea3c602baef10fb4dae3e1d6c1e8f1a90d3"
+            ]
+        },
+        {
+            "key": "hungary-parliamentary-election-popular-vote-winner",
+            "display_name": "hungary-parliamentary-election-popular-vote-winner",
+            "exhaustive": true,
+            "condition_ids": [
+                "0x9de7d6295c6e0477c0e594a211263cbbe41749ec6fd59697220a2cc05b7e2cdb",
+                "0x49131d36d313837145649d4cd7dcebbda31324435586cf8f102ed753a699c02f",
+                "0xce4b3c1a4c41e1576598ca465ca327f60240e4033524836e5adfa7ef4f4036e9"
+            ]
+        }
+    ],
+    "contracts": [
+        {
+            "name": "Will Sevilla FC win on 2026-04-11?",
+            "condition_id": "0xb973b6f9a4c0195df86c56478a1407e897fdcb9bd97d35ffb9322dd78e41ebb5",
+            "token_id_yes": "101298648672832537416407088744129126888343193125832545807788504499777989245747",
+            "token_id_no": "103593326999189144511980197892152711272542842687141106794103672442345659481047"
+        },
+        {
+            "name": "Will Sevilla FC vs. Club Atl\u00e9tico de Madrid end in a draw?",
+            "condition_id": "0x75453e6d6a13cefa7d3dc58e0f2b6221cf4d6f775c5e5bacda58a34bbfc05fe6",
+            "token_id_yes": "66905038716771901145640181328259407988294864406574378702328839771534423427917",
+            "token_id_no": "38622436090180019117542566128755655886645547935149428498205461409131514599261"
+        },
+        {
+            "name": "Will Club Atl\u00e9tico de Madrid win on 2026-04-11?",
+            "condition_id": "0xa2527fe14a2261e6ac08a58c01f420531da6070cec3d8df26f75251abab37020",
+            "token_id_yes": "82464026243028954665393067655142830183146197952877236026945703329847586225028",
+            "token_id_no": "30199857336594618313395718537656136860334173608459472062345094791252439763211"
+        },
+        {
+            "name": "Will the Fed decrease interest rates by 50+ bps after the April 2026 meeting?",
+            "condition_id": "0xd72622d154dfe65b9c019d6afcfe75a55717e5c502db611f555b101aafbf6ec5",
+            "token_id_yes": "18690049947242812495755151360212639738977254879109748949267393375856311641700",
+            "token_id_no": "44217754360633979680316989769899520588351517398269898942558308875588541304698"
+        },
+        {
+            "name": "Will the Fed decrease interest rates by 25 bps after the April 2026 meeting?",
+            "condition_id": "0x0d14f5dc9fb3250ec888b1ac8d9fe9a0ce06f9d3ea60fdf138e8690622fea84c",
+            "token_id_yes": "83479140651306794046790588004449066364152228067472874205697111967337978544729",
+            "token_id_no": "86189905157402748775272356734086074576046362545577080735663677743589826713172"
+        },
+        {
+            "name": "Will there be no change in Fed interest rates after the April 2026 meeting?",
+            "condition_id": "0x36e8ca24d2a13435f519f15580d42b45cdbe3bc425fb39a7c2733260357af0fa",
+            "token_id_yes": "63586620628756015058616403521099137018911742768824051367331188904593189743777",
+            "token_id_no": "31766935524058663070405983804663917978960087327501512757848582448134393241922"
+        },
+        {
+            "name": "Will the Fed increase interest rates by 25+ bps after the April 2026 meeting?",
+            "condition_id": "0xd4d00e5bf8b960cc37c74c1ec19e41e00b0706add203ddcfbb65ad006c5c223a",
+            "token_id_yes": "9556122149160720922715284597610520228366807023831966638741974320131898296289",
+            "token_id_no": "30695356184876659373803609107050405812738015124680927512315982415984867952338"
+        },
+        {
+            "name": "Will Portland Timbers win on 2026-04-11?",
+            "condition_id": "0xbdf5381d6b17a31a6237187f8c1933f098848f048f962511c6fc4189ee33f05c",
+            "token_id_yes": "30910972965526071114062171004579719361294457635812989407018083664451098166104",
+            "token_id_no": "56877272273919769479383583427068992951437937742810574419048009984041381677153"
+        },
+        {
+            "name": "Will Portland Timbers vs. Los Angeles FC end in a draw?",
+            "condition_id": "0xb2205d6017a318931889fb9b837b7aac85015cb2b03cf64db3c0aed7416e4a36",
+            "token_id_yes": "14139581167654142796021232730567100030787107886142393730067319070348321156869",
+            "token_id_no": "44007626806512141673008107481443611421807679229937153916287903514696887889995"
+        },
+        {
+            "name": "Will Los Angeles FC win on 2026-04-11?",
+            "condition_id": "0xb2509dd7f349b7e01101500f916a86df79ac1580c74fba7f456a5eefdaa76764",
+            "token_id_yes": "83911069221933552607855215439635094695744975329756226689696125610369890691344",
+            "token_id_no": "58921500154540721219153654207195198563512473024986887798853252775944673690350"
+        },
+        {
+            "name": "Will Austin FC win on 2026-04-11?",
+            "condition_id": "0xf5c7c91a181c647b19faae9d7bda82e06e206a4fa6501f2aa7ff0c68ff343208",
+            "token_id_yes": "110841719561696385532096557452670564306924967306031757716085102800288570101659",
+            "token_id_no": "79138227116204521679702972343288626033004029213416479820231537838277339311222"
+        },
+        {
+            "name": "Will Austin FC vs. Los Angeles Galaxy end in a draw?",
+            "condition_id": "0xb8d785bd9aba93644d2bce0a1ce987ce2a8282ae60e5f3a8cfa39e943857e795",
+            "token_id_yes": "20781010287864751247692955600775867032853706569410614682188115791028862053073",
+            "token_id_no": "26818588779956617930364532945382787960829241129948286462003036285264510143785"
+        },
+        {
+            "name": "Will Los Angeles Galaxy win on 2026-04-11?",
+            "condition_id": "0x12403c70e6765cb3d248d9a87089bdd484ef3dd56de4030288df0d6e36f4eff7",
+            "token_id_yes": "60687126819391855411416070805140330283967322856001454732477602360126213304893",
+            "token_id_no": "96327422949533477787978351573124763824770623296822072324078542083883302366823"
+        },
+        {
+            "name": "Will Juventus FC win on 2026-04-11?",
+            "condition_id": "0x44a1ff474156122b04bbce985d106e21040c044c6035487e99e6803ebf3bc64f",
+            "token_id_yes": "6529625961251255941215196067095137749877400354199620679830892654084559880211",
+            "token_id_no": "68269235611589136217398193086756040598180790593295416350870722225107324371380"
+        },
+        {
+            "name": "Will Atalanta BC win on 2026-04-11?",
+            "condition_id": "0x6e4c0abe426046172aad25a959f38007cc3b5499e30af8dc7b944be3d805aeef",
+            "token_id_yes": "75985306245724988235248693404535835138196263788472523534075094266694487305219",
+            "token_id_no": "16975407673689653297781652763952307864196343983756552252325584177192816397434"
+        },
+        {
+            "name": "Will Atalanta BC vs. Juventus FC end in a draw?",
+            "condition_id": "0x81535e2f33efe74d777e7d87bbaabea3c602baef10fb4dae3e1d6c1e8f1a90d3",
+            "token_id_yes": "73546868388686572385212816201067483603861190469371652156595148188463478243703",
+            "token_id_no": "73883005523140008620305205732436768028078404863926488652009276055541465572044"
+        },
+        {
+            "name": "Will another party win the most national list votes in the 2026 Hungarian parliamentary election?",
+            "condition_id": "0x9de7d6295c6e0477c0e594a211263cbbe41749ec6fd59697220a2cc05b7e2cdb",
+            "token_id_yes": "2855118890557108353799616078878181656086674012042505590004054873085053199589",
+            "token_id_no": "7010363085127357722216334168770772420039061982407763424516676343974511877715"
+        },
+        {
+            "name": "Will Fidesz\u2013KDNP win the most national list votes in the 2026 Hungarian parliamentary election?",
+            "condition_id": "0x49131d36d313837145649d4cd7dcebbda31324435586cf8f102ed753a699c02f",
+            "token_id_yes": "105839270895225421428923010407392581699334769109560634674101085014721426596374",
+            "token_id_no": "17939041209709230158142207256633369876811259252531082643080096427333036714916"
+        },
+        {
+            "name": "Will Tisza win the most national list votes in the 2026 Hungarian parliamentary election?",
+            "condition_id": "0xce4b3c1a4c41e1576598ca465ca327f60240e4033524836e5adfa7ef4f4036e9",
+            "token_id_yes": "110262877708682237012810851456705381999639454890185254208021364473808470300329",
+            "token_id_no": "110390860403804152016409239623906927290913939776303770732793738821309960956028"
+        }
+    ]
+}

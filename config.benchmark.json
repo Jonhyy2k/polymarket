@@ -1,0 +1,123 @@
+{
+    "min_edge_threshold_bps": 0,
+    "taker_fee_bps": 100,
+    "summary_interval_seconds": 60,
+    "warmup_seconds": 20,
+    "log_file": "logs/arb_benchmark.csv",
+    "replay_log_file": "logs/replay_benchmark.csv",
+    "ping_interval_seconds": 15,
+    "stale_feed_timeout_seconds": 30,
+    "reconnect_max_delay_seconds": 30,
+    "message_queue_capacity": 256,
+    "metrics_queue_capacity": 32768,
+    "opportunity_queue_capacity": 4096,
+    "replay_queue_capacity": 8192,
+    "active_market_report_limit": 10,
+    "custom_feature_enabled": true,
+    "initial_dump": true,
+    "metrics_enabled": true,
+    "edge_telemetry_enabled": false,
+    "replay_logging_enabled": false,
+    "hot_path_logging": false,
+    "flush_csv_each_write": false,
+    "fetch_market_metadata": false,
+    "enable_group_arbitrage": false,
+    "auto_detect_exhaustive_groups": false,
+    "maker_arb_enabled": false,
+    "pin_thread_cpu": -1,
+    "receiver_cpu": 2,
+    "parser_cpu": 4,
+    "logger_cpu": 6,
+    "lock_memory": false,
+    "prefault_stack_kb": 64,
+    "realtime_priority": 0,
+    "receiver_priority": 0,
+    "parser_priority": 0,
+    "logger_priority": 0,
+    "contracts": [
+        {
+            "name": "FED-DECREASE-50BPS-APR26",
+            "condition_id": "0xd72622d154dfe65b9c019d6afcfe75a55717e5c502db611f555b101aafbf6ec5",
+            "token_id_yes": "18690049947242812495755151360212639738977254879109748949267393375856311641700",
+            "token_id_no": "44217754360633979680316989769899520588351517398269898942558308875588541304698"
+        },
+        {
+            "name": "FED-INCREASE-25BPS-APR26",
+            "condition_id": "0xd4d00e5bf8b960cc37c74c1ec19e41e00b0706add203ddcfbb65ad006c5c223a",
+            "token_id_yes": "9556122149160720922715284597610520228366807023831966638741974320131898296289",
+            "token_id_no": "30695356184876659373803609107050405812738015124680927512315982415984867952338"
+        },
+        {
+            "name": "REAL-MADRID-WIN-LA-LIGA-2025-26",
+            "condition_id": "0xa1f08ec3bcc1434cb0b695bd5ee9f81268ef45fb73f752b3a1c1fb1d35750866",
+            "token_id_yes": "88657857917663921842097927058013051966750383205171131721194307619909198186324",
+            "token_id_no": "88014215279768883204444335352790817853938492912441294789310865378166990386734"
+        },
+        {
+            "name": "BETIS-TOP-4-LA-LIGA-2025-26",
+            "condition_id": "0xccb49e0802c9ada89016c5f6f9933847455b736228812d0707a88e014804a630",
+            "token_id_yes": "81304145828607624927593781798310463714484865200409152894719292343497594428963",
+            "token_id_no": "79795882971791559735842491100915770382923497517929862466123107473219678670981"
+        },
+        {
+            "name": "PIRATES-VS-CUBS-APR10-2026",
+            "condition_id": "0x0ba8ddd51735dcff009c71a803e875f204c191f9b3b53d50bad6edf01b6152b4",
+            "token_id_yes": "21854390042885899497573535903652216392353145589484936152336505378386137334022",
+            "token_id_no": "5144956057357119855711798915403647972383468747682270694225635373233067803800"
+        },
+        {
+            "name": "RUSSIA-UKRAINE-CEASEFIRE-APR30-2026",
+            "condition_id": "0x7434b22007745d99095c102119fdb6b975d34869212e9dda4c6c5c48db0683a7",
+            "token_id_yes": "49104850284632622899464724213962069238178748191343145680035482303540284145930",
+            "token_id_no": "32509811268907189614687992216888444066936299378006345784007012748724037421351"
+        },
+        {
+            "name": "FED-DECREASE-25BPS-APR26",
+            "condition_id": "0x0d14f5dc9fb3250ec888b1ac8d9fe9a0ce06f9d3ea60fdf138e8690622fea84c",
+            "token_id_yes": "83479140651306794046790588004449066364152228067472874205697111967337978544729",
+            "token_id_no": "86189905157402748775272356734086074576046362545577080735663677743589826713172"
+        },
+        {
+            "name": "IRANIAN-REGIME-FALL-APR30-2026",
+            "condition_id": "0xe443dab97ad8b7f58558cc7a6a3932d156031e962a451e0461e9a4578d78fe84",
+            "token_id_yes": "48764428286656921488851644351774667118009263342042758531252625616470924946480",
+            "token_id_no": "45752951190517118746418545365916139233368614665273368123939609626397431866529"
+        },
+        {
+            "name": "VIKTOR-ORBAN-NEXT-HUNGARY-PM",
+            "condition_id": "0x5ec80dc407457301f282a2b44341947afc700dfaa7923d14c8894e04bc63b03f",
+            "token_id_yes": "16894424691858208925745474726543713759924126381815674402361002638388880101929",
+            "token_id_no": "17928724382258631631719579012359945400865032871287932503640701089143599914494"
+        },
+        {
+            "name": "JASMINE-CROCKETT-2028-DEM-NOM",
+            "condition_id": "0x3cd6e52603d80ddbbdac9b1a4d43f9b7faa6aae4fae4d0fdfad3bd58454da7d3",
+            "token_id_yes": "22103094389913052942362639589409218272323168761614999702665821259175535456835",
+            "token_id_no": "10893367019711826592833821276710094799225035200719824531380610476790390190688"
+        },
+        {
+            "name": "FED-NO-CHANGE-APR26",
+            "condition_id": "0x36e8ca24d2a13435f519f15580d42b45cdbe3bc425fb39a7c2733260357af0fa",
+            "token_id_yes": "63586620628756015058616403521099137018911742768824051367331188904593189743777",
+            "token_id_no": "31766935524058663070405983804663917978960087327501512757848582448134393241922"
+        },
+        {
+            "name": "LIAM-LAWSON-2026-F1-CHAMPION",
+            "condition_id": "0xcf72b0f49af9446288a897ac1d73afa72549d98de7860bb17dacc3c4379a2c58",
+            "token_id_yes": "12049029739674782709547394278437698405073155537994805992211273099129156266263",
+            "token_id_no": "103862174600718979743576901161749418143790066185839837189169765006104491928832"
+        },
+        {
+            "name": "TRUMP-OUT-AS-PRESIDENT-APR30",
+            "condition_id": "0x24f38479176af2d71f64161d53bde777aef49ef1c03066510174d43a8d2a43fe",
+            "token_id_yes": "64692489991058251805493211665308232352904714094444866630395154130535717537678",
+            "token_id_no": "75011010397327449772865680975808343950186072319166520162137369101569943559834"
+        },
+        {
+            "name": "ANGELS-VS-REDS-APR10-2026",
+            "condition_id": "0x9bacf2c266a9695e7d611db7d34e03040e53e954175f7dc3786f4f7f9f47730c",
+            "token_id_yes": "1994634904486167953061623820151171602574392666051922448440504059521406666030",
+            "token_id_no": "7253239084039025643994405215269235389848977553079683219328303048282108903413"
+        }
+    ]
+}

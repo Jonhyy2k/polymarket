@@ -1,0 +1,247 @@
+# Polymarket C++ Arbitrage Detector — Situation Brief
+
+## Project context
+
+Repo: `/home/joaop/PyResearch/polymarket/cpp`
+A C++ arbitrage detector for Polymarket CLOB. Subscribes to the
+`ws-subscriptions-clob.polymarket.com` WebSocket feed, parses book/price_change/bbo
+events with simdjson, maintains per-contract orderbooks, and runs arbitrage checks
+on every book update. Outputs CSV logs + a live summary banner with latency
+histograms and a "paper trading" P&L.
+
+Key files:
+- `src/main.cpp`         — pipeline, frame loop, dispatch
+- `src/websocket.cpp`    — Boost.Beast WS client (zero-copy into simdjson pad buffer)
+- `src/parser.hpp`       — simdjson event parsing
+- `src/orderbook.cpp`    — book apply_book / apply_price_change / apply_best_bid_ask
+- `src/arbitrage.cpp`    — arb detection (taker + maker, single-contract + group)
+- `src/logger.cpp`       — CSV writers, latency/edge tracking, summary banner
+- `src/types.hpp`        — Price/Size typedefs, Contract/Orderbook/Config structs
+- `config.strategy.json` — 10 contracts across Fed-April, WBA-Millwall, Famalicao groups
+
+Pipeline latency is ~400 µs end-to-end (t0 WS recv → t3 arb checked), all threads
+CPU-pinned (receiver=2, parser=4, logger=6). This part is solid and well within
+the sub-ms target.
+
+## What I was asked to check
+
+The user ran 3 × 5-second benchmarks against `config.strategy.json` and pasted the
+summary output into `outputs.txt`. The banner reported:
+
+    Run 1: Messages=2, Opportunities=10, Paper P&L=$9833.11, Volume=$40810
+    Run 2: Messages=1, Opportunities=0,  Paper P&L=$0,       Volume=$0
+    Run 3: Messages=2, Opportunities=5,  Paper P&L=$10181.56, Volume=$30760
+
+The user asked "it seems that it works right?" — I went into the code and the
+associated CSV/replay logs to verify whether those P&L numbers represent a
+real profit-making mechanism. They do not.
+
+## Bottom line
+
+- Pipeline (WS / parse / book / latency): **working as designed, fast and correct.**
+- Taker arbitrage detection (`BUY_BOTH`, `SELL_BOTH`, `BUY_GROUP_YES`,
+  `SELL_GROUP_YES`, `BUY_NO_SELL_OTHERS`, `SELL_NO_BUY_OTHERS`): **math is correct.**
+  On these specific market states, it correctly reports **negative edges** — there
+  is no real arbitrage available. E.g. `BUY_BOTH best raw=-60 bps`,
+  `BUY_GROUP_YES best raw=-8670 bps`.
+- Paper P&L number: **not a real P&L.** The entire positive number comes from the
+  maker-arb categories, which are computed under assumptions that do not hold on
+  the markets being tested. And even that fictional number is inflated ~5× by a
+  per-frame multi-count bug.
+
+So the engine is a working arbitrage **scanner**. It has not found any actual
+arbitrage yet. The "profit-making mechanism" in the output is an accounting
+artifact.
+
+## Concrete evidence from `logs/arb_strategy.csv` + `logs/replay_strategy.csv`
+
+### Bug 1 — One market state produces 5 "opportunities" all counted independently
+
+Frame `11034150942619` in `logs/replay_strategy.csv` lines 23-26 has this book
+for the Fed-April group (4 legs, exhaustive):
+
+    Contract           yes_bid(size)   yes_ask(size)   no_bid   no_ask(size)
+    FED-DEC-50BPS      4 (575,837)     215 (200)       785      996
+    FED-DEC-25BPS      10 (69)         347 (5)         653      990
+    FED-NO-CHANGE      974 (5,662)     980 (5,494)     20       26 (5,662)
+    FED-INC-25BPS      7 (66,087)      325 (2,500)     675      993
+
+`logs/arb_strategy.csv` lines 17-21 then emits **5 separate opportunities** for
+that single frame, all with `theoretical_pnl=1874.12` each:
+
+    row 17: MAKER_SELL_GROUP_YES                              (whole group)
+    row 18: MAKER_BUY_NO_SELL_OTHERS  focal=FED-DEC-50BPS
+    row 19: MAKER_BUY_NO_SELL_OTHERS  focal=FED-DEC-25BPS
+    row 20: MAKER_BUY_NO_SELL_OTHERS  focal=FED-NO-CHANGE
+    row 21: MAKER_BUY_NO_SELL_OTHERS  focal=FED-INC-25BPS
+
+In `main.cpp:466-474`, `enqueue_output` iterates every opportunity in the
+`ArbCheckOutput` and pushes each to the opportunity queue unconditionally.
+In `logger.cpp:273` each one adds to `cumulative_pnl_`. So one synthetic
+book state booked **5 × $1874.12 = $9370.60**, which is ~95% of Run 1's $9833
+cumulative total. In reality those 5 "strategies" share positions and collapse
+to **at most one** executable trade.
+
+### Bug 2 — Maker-arb edge is fictional on dead markets
+
+The MAKER_* strategies post a passive order one tick inside the spread and
+assume you simultaneously hit the other legs at their current best bid/ask.
+
+`arbitrage.cpp:582-623` (`MAKER_SELL_GROUP_YES`) picks FED-DEC-25BPS as passive
+(`inside_sell = ask - 1 = 346`) and uses others' best bids:
+
+    total_proceeds = 346 + 4 + 974 + 7 = 1331
+    raw_edge = 1331 - 1000 = 331 thou = 3310 bps
+
+That's the 33.1% "edge" in the banner. What it actually requires:
+
+1. Post a limit sell at $0.346 on FED-DEC-25BPS, which sits **$0.337 above the
+   current best bid of $0.010** on a dead market.
+2. Someone crosses that 337 bps spread to hit your order.
+3. While that happens, the three other quotes (FED-DEC-50BPS bid=$0.004,
+   FED-NO-CHANGE bid=$0.974, FED-INC-25BPS bid=$0.007) remain available.
+
+None of those are realistic. In particular, FED-NO-CHANGE's 974 yes_bid @ size
+5662 and 26 no_ask @ size 5662 are almost certainly the **same LP posting both
+sides of the same position** (identical size, complementary prices summing to
+exactly 1000). Hitting their 974 bid with size 5662 wipes their quote and the
+"arb" disappears.
+
+The detector knows there's no taker arb on this frame — `SELL_GROUP_YES best
+raw=-50 bps` shows the real sum-of-bids = 995 < 1000. The 3310 bps number comes
+purely from the maker-inside-spread assumption.
+
+### Bug 3 — `size_usd` is mislabeled (it's shares, not dollars)
+
+`types.hpp:13` defines `using Size = uint32_t;` with a comment "share counts
+truncated to whole numbers". `arbitrage.cpp:94` assigns that Size into
+`opp.size_usd`. `logger.cpp:274` sums it into `cumulative_vol_` and
+`logger.cpp:462` prints `Volume: $%.0f`.
+
+So `Volume: $40810` is actually **40,810 shares**, not dollars notional.
+(The `theoretical_pnl` is in dollars correctly — `edge_fraction × shares = $` —
+but the Volume line has the wrong units/label.)
+
+Real dollar notional would be `sum(size_shares × price_per_share)`, which
+nobody computes.
+
+### Bug 4 — Markets under test are dead, not the engine's fault but makes benchmarks useless
+
+- `FAMALICAO-*` (3 contracts) — metadata lookup returns nothing; football game
+  was Apr 10 and markets are effectively expired. They never send book events.
+- Only 1-2 messages per 5-second run, vs the tens of thousands/s you'd want on
+  an active market.
+- `Books: 14` across 10 contracts = 7 contracts × 2 sides — the 3 FAMALICAO
+  contracts never sent their initial snapshots.
+- `WBA-MILLWALL-DRAW` has `yes_bid=999, yes_ask=0` — one-sided locked book,
+  probably a stale resting order.
+- The FED group is dominated by a single LP on FED-NO-CHANGE; the other three
+  legs have near-zero bids and tiny top-of-book sizes.
+
+Run 2 reported $0 because the FED-NO-CHANGE 974@5662 quote was gone during that
+5-second window (see `replay_strategy.csv:34-40` where FED-NO-CHANGE shows
+`yes_bid=640 size=37`).
+
+## What the engine has correctly detected so far
+
+- Pipeline works, latency is good (sub-ms e2e), CPU pinning engages, reconnect
+  logic present, zero-copy into simdjson pad buffer working.
+- Taker-arb detection returns correctly-negative edges on dead markets. That's
+  the truth of those markets — no trader would execute on them.
+- Exhaustive basket auto-detection works: picks up Fed-April as 4-leg and
+  WBA-Millwall as 3-leg correctly (FAMALICAO group is skipped because
+  metadata failed).
+
+## What needs to be fixed before the P&L number means anything
+
+Priority order — (1) and (2) are mandatory before the paper-trading number
+is worth reading at all, (3) and (4) are cleanup.
+
+1. **Emit at most one winner per frame.** In `main.cpp:466-474` the detector
+   output is iterated and every opportunity is pushed. Instead, pick the single
+   best opportunity per frame (ranked by `net_edge_thou * min_size` or similar)
+   and drop the rest, OR deduplicate by the set of actual legs touched. The
+   5 MAKER_* variants on the Fed group are all in overlapping position space —
+   they shouldn't all be booked.
+
+   Alternative: split `cumulative_pnl_` into *realizable* vs *theoretical* so
+   you can still see all variants in CSV but only one counts toward P&L.
+
+2. **Gate or separately track MAKER_* strategies.** They rely on a fill
+   assumption that needs a fill-probability model or at minimum a realism
+   filter: e.g. require `inside_price` to be within N ticks of `best_bid`, or
+   require recent trade volume on the passive leg. Currently nothing prevents
+   a MAKER_SELL at `ask - 1 = 346` from booking 3310 bps of fictional edge
+   against a `bid = 10` market.
+
+   Simplest first step: keep MAKER_* detection for telemetry/CSV but exclude
+   it from `cumulative_pnl_` until a fill model exists. The TAKER paper-P&L
+   alone would be an honest number.
+
+3. **Rename `size_usd` → `size_shares`** throughout (`types.hpp:112`,
+   `arbitrage.cpp`, `logger.*`, `arb_strategy.csv` header). Recompute the
+   banner's `Volume: $X` as dollar notional: `sum(size_shares × price_per_share)`.
+   Or just drop it; it's the P&L number that matters.
+
+4. **Deduplicate group+focal overlap.** `MAKER_BUY_NO_SELL_OTHERS` with 4
+   different focals is 4 rotations of one strategy family. The detector should
+   emit the single best-focal variant per group per frame, not all of them.
+
+## How to validate a fix
+
+The user's memory notes (`/home/joaop/.claude/projects/-home-joaop-PyResearch-polymarket/memory/MEMORY.md`)
+already say to "find high-volume crypto 30-min markets for tighter spreads."
+Do that first — benchmarking on dead football/fed markets tells you nothing.
+
+Use this API to find candidates:
+    https://gamma-api.polymarket.com/markets?closed=false&limit=5&order=volume24hr&ascending=false
+
+Then re-run the benchmark harness:
+    SKIP_BUILD=1 LIVE_OUTPUT=1 ./deploy/benchmark_ec2.sh ./config.strategy.json 30
+
+A sanity test after fixes (1) and (2):
+- On a real active crypto market, you should see hundreds to thousands of
+  messages per 5-second window, not 1-2.
+- `Opportunities` should be roughly linear with message count, not a constant
+  5-per-frame-multiplier.
+- TAKER paper P&L should be small or zero on efficient markets — that is the
+  *correct* answer. If it's not small, either there's a real arb (great!) or
+  there's still a double-count.
+- MAKER paper P&L (if you keep tracking it separately) should be bounded by a
+  realistic fill-rate haircut.
+
+## Things NOT to "fix"
+
+- The latency numbers. They're fine. Don't touch the zero-copy path.
+- The taker-arb math in `arbitrage.cpp`. It's correct.
+- The CPU pinning / threading. Works.
+- Don't add "hot_path_logging" in the detection loop; it's a dev-only trace.
+
+## Additional context from the user's project memory
+
+- GCC 14 compat shim in `src/gcc14_compat.cpp` provides `__cxa_call_terminate`
+  (only needed with anaconda Boost + GCC 14). No sudo on dev machine.
+- Boost header-only via `BOOST_ERROR_CODE_HEADER_ONLY`.
+- simdjson is downloaded to `deps/` (not in git); `deploy/setup_ec2.sh` handles it.
+- Target deploy is AWS EC2 z1d.3xlarge in eu-west-2b.
+- Next infra step per plan: add `price_change` incremental book updates
+  (already present in parser/main.cpp — verify it's wired end-to-end), then
+  kernel bypass (io_uring) experiments.
+
+## Files to read first if you're picking this up cold
+
+1. `outputs.txt`                     — the raw benchmark output being analyzed
+2. `logs/arb_strategy.csv`           — per-opportunity CSV, shows the 5×-multi-count
+3. `logs/replay_strategy.csv`        — per-frame snapshot of all group legs
+4. `src/arbitrage.cpp`               — all detection kinds, ~830 lines
+5. `src/main.cpp:448-477`            — `enqueue_output`, the single place to fix bug 1
+6. `src/logger.cpp:260-275`          — where `cumulative_pnl_` accumulates
+7. `src/types.hpp:97-115`            — `ArbOpportunity` struct, mislabeled `size_usd`
+
+## One-sentence summary for the next agent
+
+The engine is a correctly-built, fast, sub-ms arbitrage scanner that has not
+yet found an actual executable arbitrage; the positive "paper P&L" it prints
+is a per-frame 5× over-count of MAKER_* strategies whose fills can't happen on
+the dead markets currently in `config.strategy.json`, and the "Volume" label
+on the banner is shares mislabeled as dollars.

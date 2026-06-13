@@ -1,0 +1,373 @@
+(base) joaop@joao-83db:~/PyResearch/polymarket/cpp$ SKIP_BUILD=1 LIVE_OUTPUT=1 ./deploy/benchmark_ec2.sh ./config.strategy.json 5
+[bench] memlock unchanged
+[bench] binary=/home/joaop/PyResearch/polymarket/cpp/build/arb_detector
+[bench] config=./config.strategy.json
+[bench] duration=5s
+[bench] output=/home/joaop/PyResearch/polymarket/cpp/logs/benchmark-20260411T005757Z.log
+[CONFIG] Loaded 10 contracts from ./config.strategy.json
+[META] FED-DECREASE-50BPS-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FED-DECREASE-25BPS-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FED-NO-CHANGE-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FED-INCREASE-25BPS-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FAMALICAO-WIN-APR10-2026 | market lookup failed: No market metadata returned
+[META] FAMALICAO-MOREIRENSE-DRAW-APR10-2026 | market lookup failed: No market metadata returned
+[META] MOREIRENSE-WIN-APR10-2026 | market lookup failed: No market metadata returned
+[META] WBA-WIN-APR11-2026 | event=elc-wba-mil-2026-04-11 | negRisk=true | fees=none | rate=0
+[META] WBA-MILLWALL-DRAW-APR11-2026 | event=elc-wba-mil-2026-04-11 | negRisk=true | fees=none | rate=0
+[META] MILLWALL-WIN-APR11-2026 | event=elc-wba-mil-2026-04-11 | negRisk=true | fees=none | rate=0
+[GROUP] Enabled exhaustive basket: West Bromwich Albion FC vs. Millwall FC | legs=3
+[GROUP] Enabled exhaustive basket: Fed decision in April? | legs=4
+[INIT] Contract: FED-DECREASE-50BPS-APR26
+       YES token: 1869004994724281249575515136021263973897...
+       NO  token: 4421775436063397968031698976989952058835...
+[INIT] Contract: FED-DECREASE-25BPS-APR26
+       YES token: 8347914065130679404679058800444906636415...
+       NO  token: 8618990515740274877527235673408607457604...
+[INIT] Contract: FED-NO-CHANGE-APR26
+       YES token: 6358662062875601505861640352109913701891...
+       NO  token: 3176693552405866307040598380466391797896...
+[INIT] Contract: FED-INCREASE-25BPS-APR26
+       YES token: 9556122149160720922715284597610520228366...
+       NO  token: 3069535618487665937380360910705040581273...
+[INIT] Contract: FAMALICAO-WIN-APR10-2026
+       YES token: 1043605088119228848708763398212325035587...
+       NO  token: 9124982124428887192000964214601329168071...
+[INIT] Contract: FAMALICAO-MOREIRENSE-DRAW-APR10-2026
+       YES token: 1400592296630641984051148888120535800006...
+       NO  token: 5714979145312820651928489060265257327536...
+[INIT] Contract: MOREIRENSE-WIN-APR10-2026
+       YES token: 1387384222478514061652924690616861231419...
+       NO  token: 1080718256488231014317658458107474614525...
+[INIT] Contract: WBA-WIN-APR11-2026
+       YES token: 6092120755377849693743203702361978102749...
+       NO  token: 7607099529050254900970982443272987772833...
+[INIT] Contract: WBA-MILLWALL-DRAW-APR11-2026
+       YES token: 1129457264248754032318516072842458363540...
+       NO  token: 5155357130866627855748437804814648457462...
+[INIT] Contract: MILLWALL-WIN-APR11-2026
+       YES token: 4636236631860534748831685638543990726693...
+       NO  token: 8595386008342361471451341625126949527066...
+[RUNTIME] Pinned parser thread to CPU 4
+[RUNTIME] Pinned logger thread to CPU 6
+[RUNTIME] Pinned receiver thread to CPU 2
+
+[STARTING] Connecting to ws-subscriptions-clob.polymarket.com...
+
+[PERF] DNS resolve: 5.62ms
+[PERF] TCP connect: 13.41ms
+[PERF] TLS handshake: 143.39ms
+[PERF] WS handshake: 202.11ms
+[PERF] Total connect: 364.98ms (DNS=5.6 + TCP=13.4 + TLS=143.4 + WS=202.1)
+[CONNECTED] WebSocket upgrade complete
+[SUBSCRIBED] 10 contract(s): FED-DECREASE-50BPS-APR26, FED-DECREASE-25BPS-APR26, FED-NO-CHANGE-APR26, FED-INCREASE-25BPS-APR26, FAMALICAO-WIN-APR10-2026, FAMALICAO-MOREIRENSE-DRAW-APR10-2026, MOREIRENSE-WIN-APR10-2026, WBA-WIN-APR11-2026, WBA-MILLWALL-DRAW-APR11-2026, MILLWALL-WIN-APR11-2026
+
+[SIGNAL] Shutdown requested
+
+[SIGNAL] Shutdown requested
+
+[FINAL]
+
+╔══════════════════════════════════════════════════════════════════╗
+║  SUMMARY (1s interval)                                        ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Messages: 2      (2.0/s)                                      ║
+║  Books: 14     | PxChg: 2      | BBO: 0      | Trades: 0      ║
+║  Total: 2      msgs | 14     books | 2      pxchg | 0      bbo ║
+║         0      trades                                          ║
+║  Arb checks: 60     | Opportunities: 10                       ║
+║  Same Mkt: BB:0    SB:0    | Group: BG:0    SG:0        ║
+║  NoVsRest: BNS:0    SNB:0                                 ║
+║  Maker: MBB:0    MSB:0    | MBG:0    MSG:2           ║
+║  MNoRest: MBN:8    MSN:0                                ║
+╠══════════════════════════════════════════════════════════════════╣
+║  LATENCY (μs)          min      avg      p50      p99    p99.9 ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Queue wait            11.4    203.6    395.8    395.8    395.8   ║
+║  Parse (frame)          6.5    101.5    196.4    196.4    196.4   ║
+║  Book upd (frame)       1.4     89.9    178.3    178.3    178.3   ║
+║  Arb batch              5.4     15.2     25.1     25.1     25.1   ║
+║  End-to-end (t0→t3)   409.2    410.2    411.3    411.3    411.3   ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Msg size (bytes)        622    24746    48871    48871    48871   ║
+╠══════════════════════════════════════════════════════════════════╣
+║  RAW EDGE BPS (cumulative)                                   ║
+║  BUY_BOTH           <0:5    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-60  bps | best net=-60  bps            ║
+║  SELL_BOTH          <0:5    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-60  bps | best net=-60  bps            ║
+║  BUY_GROUP_YES      <0:2    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-8670 bps | best net=-8670 bps            ║
+║  SELL_GROUP_YES     <0:2    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-50  bps | best net=-50  bps            ║
+║  BUY_NO_SELL_OTH    <0:8    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-50  bps | best net=-50  bps            ║
+║  SELL_NO_BUY_OTH    <0:8    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-8670 bps | best net=-8670 bps            ║
+║  MAKER_BUY_BOTH     <0:5    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-10  bps | best net=-10  bps            ║
+║  MAKER_SELL_BOTH    <0:5    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-10  bps | best net=-10  bps            ║
+║  MAKER_BUY_GROUP    <0:2    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-5310 bps | best net=-5310 bps            ║
+║  MAKER_SELL_GRP     <0:0    0-4:0    5-9:0    10-19:0    20+:2    ║
+║                     best raw=3310 bps | best net=3310 bps            ║
+║  MAKER_BUY_NVR      <0:0    0-4:0    5-9:0    10-19:0    20+:8    ║
+║                     best raw=3310 bps | best net=3310 bps            ║
+║  MAKER_SELL_NVR     <0:8    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-5310 bps | best net=-5310 bps            ║
+╠══════════════════════════════════════════════════════════════════╣
+║  PAPER TRADING                                                  ║
+║  Cumulative P&L: $9833.11    | Volume: $40810                    ║
+╚══════════════════════════════════════════════════════════════════╝
+
+[bench] done
+[bench] log saved to /home/joaop/PyResearch/polymarket/cpp/logs/benchmark-20260411T005757Z.log
+(base) joaop@joao-83db:~/PyResearch/polymarket/cpp$ SKIP_BUILD=1 LIVE_OUTPUT=1 ./deploy/benchmark_ec2.sh ./config.strategy.json 5
+[bench] memlock unchanged
+[bench] binary=/home/joaop/PyResearch/polymarket/cpp/build/arb_detector
+[bench] config=./config.strategy.json
+[bench] duration=5s
+[bench] output=/home/joaop/PyResearch/polymarket/cpp/logs/benchmark-20260411T005834Z.log
+[CONFIG] Loaded 10 contracts from ./config.strategy.json
+[META] FED-DECREASE-50BPS-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FED-DECREASE-25BPS-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FED-NO-CHANGE-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FED-INCREASE-25BPS-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FAMALICAO-WIN-APR10-2026 | market lookup failed: No market metadata returned
+[META] FAMALICAO-MOREIRENSE-DRAW-APR10-2026 | market lookup failed: No market metadata returned
+[META] MOREIRENSE-WIN-APR10-2026 | market lookup failed: No market metadata returned
+[META] WBA-WIN-APR11-2026 | event=elc-wba-mil-2026-04-11 | negRisk=true | fees=none | rate=0
+[META] WBA-MILLWALL-DRAW-APR11-2026 | event=elc-wba-mil-2026-04-11 | negRisk=true | fees=none | rate=0
+[META] MILLWALL-WIN-APR11-2026 | event=elc-wba-mil-2026-04-11 | negRisk=true | fees=none | rate=0
+[GROUP] Enabled exhaustive basket: West Bromwich Albion FC vs. Millwall FC | legs=3
+[GROUP] Enabled exhaustive basket: Fed decision in April? | legs=4
+[INIT] Contract: FED-DECREASE-50BPS-APR26
+       YES token: 1869004994724281249575515136021263973897...
+       NO  token: 4421775436063397968031698976989952058835...
+[INIT] Contract: FED-DECREASE-25BPS-APR26
+       YES token: 8347914065130679404679058800444906636415...
+       NO  token: 8618990515740274877527235673408607457604...
+[INIT] Contract: FED-NO-CHANGE-APR26
+       YES token: 6358662062875601505861640352109913701891...
+       NO  token: 3176693552405866307040598380466391797896...
+[INIT] Contract: FED-INCREASE-25BPS-APR26
+       YES token: 9556122149160720922715284597610520228366...
+       NO  token: 3069535618487665937380360910705040581273...
+[INIT] Contract: FAMALICAO-WIN-APR10-2026
+       YES token: 1043605088119228848708763398212325035587...
+       NO  token: 9124982124428887192000964214601329168071...
+[INIT] Contract: FAMALICAO-MOREIRENSE-DRAW-APR10-2026
+       YES token: 1400592296630641984051148888120535800006...
+       NO  token: 5714979145312820651928489060265257327536...
+[INIT] Contract: MOREIRENSE-WIN-APR10-2026
+       YES token: 1387384222478514061652924690616861231419...
+       NO  token: 1080718256488231014317658458107474614525...
+[INIT] Contract: WBA-WIN-APR11-2026
+       YES token: 6092120755377849693743203702361978102749...
+       NO  token: 7607099529050254900970982443272987772833...
+[INIT] Contract: WBA-MILLWALL-DRAW-APR11-2026
+       YES token: 1129457264248754032318516072842458363540...
+       NO  token: 5155357130866627855748437804814648457462...
+[INIT] Contract: MILLWALL-WIN-APR11-2026
+       YES token: 4636236631860534748831685638543990726693...
+       NO  token: 8595386008342361471451341625126949527066...
+[RUNTIME] Pinned parser thread to CPU 4
+[RUNTIME] Pinned logger thread to CPU 6
+[RUNTIME] Pinned receiver thread to CPU 2
+
+[STARTING] Connecting to ws-subscriptions-clob.polymarket.com...
+
+[PERF] DNS resolve: 8.36ms
+[PERF] TCP connect: 13.27ms
+[PERF] TLS handshake: 142.92ms
+[PERF] WS handshake: 95.06ms
+[PERF] Total connect: 259.82ms (DNS=8.4 + TCP=13.3 + TLS=142.9 + WS=95.1)
+[CONNECTED] WebSocket upgrade complete
+[SUBSCRIBED] 10 contract(s): FED-DECREASE-50BPS-APR26, FED-DECREASE-25BPS-APR26, FED-NO-CHANGE-APR26, FED-INCREASE-25BPS-APR26, FAMALICAO-WIN-APR10-2026, FAMALICAO-MOREIRENSE-DRAW-APR10-2026, MOREIRENSE-WIN-APR10-2026, WBA-WIN-APR11-2026, WBA-MILLWALL-DRAW-APR11-2026, MILLWALL-WIN-APR11-2026
+
+[SIGNAL] Shutdown requested
+
+[SIGNAL] Shutdown requested
+
+[FINAL]
+
+╔══════════════════════════════════════════════════════════════════╗
+║  SUMMARY (1s interval)                                        ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Messages: 1      (1.0/s)                                      ║
+║  Books: 14     | PxChg: 0      | BBO: 0      | Trades: 0      ║
+║  Total: 1      msgs | 14     books | 0      pxchg | 0      bbo ║
+║         0      trades                                          ║
+║  Arb checks: 36     | Opportunities: 0                        ║
+║  Same Mkt: BB:0    SB:0    | Group: BG:0    SG:0        ║
+║  NoVsRest: BNS:0    SNB:0                                 ║
+║  Maker: MBB:0    MSB:0    | MBG:0    MSG:0           ║
+║  MNoRest: MBN:0    MSN:0                                ║
+╠══════════════════════════════════════════════════════════════════╣
+║  LATENCY (μs)          min      avg      p50      p99    p99.9 ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Queue wait             9.9      9.9      9.9      9.9      9.9   ║
+║  Parse (frame)        165.1    165.1    165.1    165.1    165.1   ║
+║  Book upd (frame)     197.1    197.1    197.1    197.1    197.1   ║
+║  Arb batch             16.0     16.0     16.0     16.0     16.0   ║
+║  End-to-end (t0→t3)   388.1    388.1    388.1    388.1    388.1   ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Msg size (bytes)      48937    48937    48937    48937    48937   ║
+╠══════════════════════════════════════════════════════════════════╣
+║  RAW EDGE BPS (cumulative)                                   ║
+║  BUY_BOTH           <0:4    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-2100 bps | best net=-2100 bps            ║
+║  SELL_BOTH          <0:4    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-2100 bps | best net=-2100 bps            ║
+║  BUY_GROUP_YES      <0:1    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-8660 bps | best net=-8660 bps            ║
+║  SELL_GROUP_YES     <0:1    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-3390 bps | best net=-3390 bps            ║
+║  BUY_NO_SELL_OTH    <0:4    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-3390 bps | best net=-3390 bps            ║
+║  SELL_NO_BUY_OTH    <0:4    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-8660 bps | best net=-8660 bps            ║
+║  MAKER_BUY_BOTH     <0:4    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-10  bps | best net=-10  bps            ║
+║  MAKER_SELL_BOTH    <0:4    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-10  bps | best net=-10  bps            ║
+║  MAKER_BUY_GROUP    <0:1    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-5270 bps | best net=-5270 bps            ║
+║  MAKER_SELL_GRP     <0:0    0-4:1    5-9:0    10-19:0    20+:0    ║
+║                     best raw=0    bps | best net=0    bps            ║
+║  MAKER_BUY_NVR      <0:0    0-4:4    5-9:0    10-19:0    20+:0    ║
+║                     best raw=0    bps | best net=0    bps            ║
+║  MAKER_SELL_NVR     <0:4    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-5270 bps | best net=-5270 bps            ║
+╠══════════════════════════════════════════════════════════════════╣
+║  PAPER TRADING                                                  ║
+║  Cumulative P&L: $0.00       | Volume: $0                        ║
+╚══════════════════════════════════════════════════════════════════╝
+
+[bench] done
+[bench] log saved to /home/joaop/PyResearch/polymarket/cpp/logs/benchmark-20260411T005834Z.log
+(base) joaop@joao-83db:~/PyResearch/polymarket/cpp$ SKIP_BUILD=1 LIVE_OUTPUT=1 ./deploy/benchmark_ec2.sh ./config.strategy.json 5
+[bench] memlock unchanged
+[bench] binary=/home/joaop/PyResearch/polymarket/cpp/build/arb_detector
+[bench] config=./config.strategy.json
+[bench] duration=5s
+[bench] output=/home/joaop/PyResearch/polymarket/cpp/logs/benchmark-20260411T005842Z.log
+[CONFIG] Loaded 10 contracts from ./config.strategy.json
+[META] FED-DECREASE-50BPS-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FED-DECREASE-25BPS-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FED-NO-CHANGE-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FED-INCREASE-25BPS-APR26 | event=fed-decision-in-april | negRisk=true | fees=none | rate=0
+[META] FAMALICAO-WIN-APR10-2026 | market lookup failed: No market metadata returned
+[META] FAMALICAO-MOREIRENSE-DRAW-APR10-2026 | market lookup failed: No market metadata returned
+[META] MOREIRENSE-WIN-APR10-2026 | market lookup failed: No market metadata returned
+[META] WBA-WIN-APR11-2026 | event=elc-wba-mil-2026-04-11 | negRisk=true | fees=none | rate=0
+[META] WBA-MILLWALL-DRAW-APR11-2026 | event=elc-wba-mil-2026-04-11 | negRisk=true | fees=none | rate=0
+[META] MILLWALL-WIN-APR11-2026 | event=elc-wba-mil-2026-04-11 | negRisk=true | fees=none | rate=0
+[GROUP] Enabled exhaustive basket: West Bromwich Albion FC vs. Millwall FC | legs=3
+[GROUP] Enabled exhaustive basket: Fed decision in April? | legs=4
+[INIT] Contract: FED-DECREASE-50BPS-APR26
+       YES token: 1869004994724281249575515136021263973897...
+       NO  token: 4421775436063397968031698976989952058835...
+[INIT] Contract: FED-DECREASE-25BPS-APR26
+       YES token: 8347914065130679404679058800444906636415...
+       NO  token: 8618990515740274877527235673408607457604...
+[INIT] Contract: FED-NO-CHANGE-APR26
+       YES token: 6358662062875601505861640352109913701891...
+       NO  token: 3176693552405866307040598380466391797896...
+[INIT] Contract: FED-INCREASE-25BPS-APR26
+       YES token: 9556122149160720922715284597610520228366...
+       NO  token: 3069535618487665937380360910705040581273...
+[INIT] Contract: FAMALICAO-WIN-APR10-2026
+       YES token: 1043605088119228848708763398212325035587...
+       NO  token: 9124982124428887192000964214601329168071...
+[INIT] Contract: FAMALICAO-MOREIRENSE-DRAW-APR10-2026
+       YES token: 1400592296630641984051148888120535800006...
+       NO  token: 5714979145312820651928489060265257327536...
+[INIT] Contract: MOREIRENSE-WIN-APR10-2026
+       YES token: 1387384222478514061652924690616861231419...
+       NO  token: 1080718256488231014317658458107474614525...
+[INIT] Contract: WBA-WIN-APR11-2026
+       YES token: 6092120755377849693743203702361978102749...
+       NO  token: 7607099529050254900970982443272987772833...
+[INIT] Contract: WBA-MILLWALL-DRAW-APR11-2026
+       YES token: 1129457264248754032318516072842458363540...
+       NO  token: 5155357130866627855748437804814648457462...
+[INIT] Contract: MILLWALL-WIN-APR11-2026
+       YES token: 4636236631860534748831685638543990726693...
+       NO  token: 8595386008342361471451341625126949527066...
+[RUNTIME] Pinned parser thread to CPU 4
+[RUNTIME] Pinned receiver thread to CPU 2
+[RUNTIME] Pinned logger thread to CPU 6
+
+[STARTING] Connecting to ws-subscriptions-clob.polymarket.com...
+
+[PERF] DNS resolve: 19.90ms
+[PERF] TCP connect: 122.95ms
+[PERF] TLS handshake: 33.72ms
+[PERF] WS handshake: 185.73ms
+[PERF] Total connect: 362.56ms (DNS=19.9 + TCP=122.9 + TLS=33.7 + WS=185.7)
+[CONNECTED] WebSocket upgrade complete
+[SUBSCRIBED] 10 contract(s): FED-DECREASE-50BPS-APR26, FED-DECREASE-25BPS-APR26, FED-NO-CHANGE-APR26, FED-INCREASE-25BPS-APR26, FAMALICAO-WIN-APR10-2026, FAMALICAO-MOREIRENSE-DRAW-APR10-2026, MOREIRENSE-WIN-APR10-2026, WBA-WIN-APR11-2026, WBA-MILLWALL-DRAW-APR11-2026, MILLWALL-WIN-APR11-2026
+
+[SIGNAL] Shutdown requested
+
+[SIGNAL] Shutdown requested
+
+[FINAL]
+
+╔══════════════════════════════════════════════════════════════════╗
+║  SUMMARY (2s interval)                                        ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Messages: 2      (1.0/s)                                      ║
+║  Books: 14     | PxChg: 2      | BBO: 0      | Trades: 0      ║
+║  Total: 2      msgs | 14     books | 2      pxchg | 0      bbo ║
+║         0      trades                                          ║
+║  Arb checks: 60     | Opportunities: 5                        ║
+║  Same Mkt: BB:0    SB:0    | Group: BG:0    SG:0        ║
+║  NoVsRest: BNS:0    SNB:0                                 ║
+║  Maker: MBB:0    MSB:0    | MBG:0    MSG:1           ║
+║  MNoRest: MBN:4    MSN:0                                ║
+╠══════════════════════════════════════════════════════════════════╣
+║  LATENCY (μs)          min      avg      p50      p99    p99.9 ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Queue wait             3.0      5.9      8.9      8.9      8.9   ║
+║  Parse (frame)         17.9    107.3    196.8    196.8    196.8   ║
+║  Book upd (frame)      11.5    129.4    247.3    247.3    247.3   ║
+║  Arb batch             15.7     16.0     16.4     16.4     16.4   ║
+║  End-to-end (t0→t3)    48.0    258.7    469.4    469.4    469.4   ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Msg size (bytes)        622    24656    48691    48691    48691   ║
+╠══════════════════════════════════════════════════════════════════╣
+║  RAW EDGE BPS (cumulative)                                   ║
+║  BUY_BOTH           <0:5    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-60  bps | best net=-60  bps            ║
+║  SELL_BOTH          <0:5    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-60  bps | best net=-60  bps            ║
+║  BUY_GROUP_YES      <0:2    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-8660 bps | best net=-8660 bps            ║
+║  SELL_GROUP_YES     <0:2    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-50  bps | best net=-50  bps            ║
+║  BUY_NO_SELL_OTH    <0:8    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-50  bps | best net=-50  bps            ║
+║  SELL_NO_BUY_OTH    <0:8    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-8660 bps | best net=-8660 bps            ║
+║  MAKER_BUY_BOTH     <0:5    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-10  bps | best net=-10  bps            ║
+║  MAKER_SELL_BOTH    <0:5    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-10  bps | best net=-10  bps            ║
+║  MAKER_BUY_GROUP    <0:2    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-5270 bps | best net=-5270 bps            ║
+║  MAKER_SELL_GRP     <0:0    0-4:1    5-9:0    10-19:0    20+:1    ║
+║                     best raw=3310 bps | best net=3310 bps            ║
+║  MAKER_BUY_NVR      <0:0    0-4:4    5-9:0    10-19:0    20+:4    ║
+║                     best raw=3310 bps | best net=3310 bps            ║
+║  MAKER_SELL_NVR     <0:8    0-4:0    5-9:0    10-19:0    20+:0    ║
+║                     best raw=-5270 bps | best net=-5270 bps            ║
+╠══════════════════════════════════════════════════════════════════╣
+║  PAPER TRADING                                                  ║
+║  Cumulative P&L: $10181.56   | Volume: $30760                    ║
+╚══════════════════════════════════════════════════════════════════╝
+
+[bench] done
+[bench] log saved to /home/joaop/PyResearch/polymarket/cpp/logs/benchmark-20260411T005842Z.log
+

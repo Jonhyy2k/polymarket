@@ -1,0 +1,28 @@
+# Build output
+build/
+*.o
+*.a
+*.so
+core
+*.core
+
+# Vendored single-header simdjson (downloaded via setup; see README)
+deps/
+
+# Runtime logs / captured data
+logs/
+tools/ws_raw_frames.jsonl
+*.csv
+
+# Zig caches (build tooling noise)
+.zig-cache-global/
+.zig-cache-local/
+
+# Python
+__pycache__/
+*.pyc
+
+# Editor / local agent settings
+.claude/
+.vscode/
+.idea/
