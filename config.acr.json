@@ -1,0 +1,123 @@
+{
+  "min_edge_threshold_bps": 0,
+  "taker_fee_bps": 100,
+  "summary_interval_seconds": 600,
+  "warmup_seconds": 0,
+  "log_file": "logs/arb_rewards.csv",
+  "near_miss_log_file": "logs/nm_rewards.csv",
+  "replay_log_file": "logs/replay_rewards.csv",
+  "ping_interval_seconds": 15,
+  "stale_feed_timeout_seconds": 30,
+  "reconnect_max_delay_seconds": 30,
+  "message_queue_capacity": 128,
+  "metrics_queue_capacity": 8192,
+  "opportunity_queue_capacity": 1024,
+  "replay_queue_capacity": 8192,
+  "active_market_report_limit": 10,
+  "custom_feature_enabled": true,
+  "initial_dump": true,
+  "metrics_enabled": true,
+  "edge_telemetry_enabled": true,
+  "replay_logging_enabled": true,
+  "hot_path_logging": false,
+  "flush_csv_each_write": false,
+  "fetch_market_metadata": true,
+  "enable_group_arbitrage": false,
+  "auto_detect_exhaustive_groups": true,
+  "maker_arb_enabled": true,
+  "pin_thread_cpu": -1,
+  "receiver_cpu": 2,
+  "parser_cpu": 4,
+  "logger_cpu": 6,
+  "lock_memory": false,
+  "prefault_stack_kb": 64,
+  "realtime_priority": 0,
+  "receiver_priority": 0,
+  "parser_priority": 0,
+  "logger_priority": 0,
+  "contracts": [
+    {
+      "name": "will-spain-win-the-2026-fifa-world-cup-963",
+      "condition_id": "0x7976b8dbacf9077eb1453a62bcefd6ab2df199acd28aad276ff0d920d6992892",
+      "token_id_yes": "4394372887385518214471608448209527405727552777602031099972143344338178308080",
+      "token_id_no": "112680630004798425069810935278212000865453267506345451433803052322987302357330"
+    },
+    {
+      "name": "will-france-win-the-2026-fifa-world-cup-924",
+      "condition_id": "0x9b6fef249040fd17e9c107955b37ac2c3e923509b6b0ff01cc463a331ddeb894",
+      "token_id_yes": "108233603819467706476318984012158651931658302669301887462181073562758483842092",
+      "token_id_no": "32270411694523539495262303868629477861017829722282576458031815333486368239544"
+    },
+    {
+      "name": "us-iran-nuclear-deal-by-june-30",
+      "condition_id": "0xa70fc3695a65833b91b45df6db6015096f3e1471b70352ca411b4209010e7633",
+      "token_id_yes": "68283792174293775430535402015214113701251372409839518501034763677920213819299",
+      "token_id_no": "10690391194840875541563517589463912963575786539307433160985752952931887140267"
+    },
+    {
+      "name": "will-the-us-invade-iran-before-2027",
+      "condition_id": "0x5db999fad322cea2914535aae5517060c3f80ad6d8c0231cde2124a434d16846",
+      "token_id_yes": "55115078421062885512539156303747803058407616201213034911037320915726138659123",
+      "token_id_no": "1910830010387565971650098373488592514702818137344973088263643820608151819241"
+    },
+    {
+      "name": "will-uruguay-win-group-h-in-the-2026-fifa-world-cup",
+      "condition_id": "0xd136f80c161a40baa5890a7792a2a5bf264de0d5ef2711a23e4564b429969ff8",
+      "token_id_yes": "28340358178431871363210562118980589174378751473778056391324752187634135006587",
+      "token_id_no": "25187617842973863417046397115457758055463276587336812276748398130048708487113"
+    },
+    {
+      "name": "will-spain-win-group-h-in-the-2026-fifa-world-cup",
+      "condition_id": "0x766aa2fb8fafc6f063de001e1d441d0e64d84f164093feb087226b47ffc32af1",
+      "token_id_yes": "53767774368871487958852302456977659279367510767287923221897564430044671384128",
+      "token_id_no": "37821011509134197239774147789543695590581250725127252293498663449982199078732"
+    },
+    {
+      "name": "will-luiz-incio-lula-da-silva-win-the-2026-brazilian-pr",
+      "condition_id": "0xdf8e2dc5860027decbe6164555c3c1c9645c3bd33e16b9dc57ca87125047d4a8",
+      "token_id_yes": "30630994248667897740988010928640156931882346081873066002335460180076741328029",
+      "token_id_no": "79191939610100241429039499950443680906623179487184628479206155805558220344190"
+    },
+    {
+      "name": "will-jordan-bardella-win-the-2027-french-presidential-e",
+      "condition_id": "0x1166388a24a3f2a9bb0a45956bdb205c70f0ecafb8539e277a57adf022e306be",
+      "token_id_yes": "1114938555853162662375805609341386795965961002028313810409954359771505507177",
+      "token_id_no": "39814929193752558825038669670647206213767631805507014416889259758143556745530"
+    },
+    {
+      "name": "will-the-republican-party-control-the-house-after-the-2",
+      "condition_id": "0x4e4f77e7dbf4cab666e9a1943674d7ae66348e862df03ea6f44b11eb95731928",
+      "token_id_yes": "65139230827417363158752884968303867495725894165574887635816574090175320800482",
+      "token_id_no": "17371217118862125782438074585166210555214661810823929795910191856905580975576"
+    },
+    {
+      "name": "will-the-democratic-progressive-party-dpp-win-the-most-",
+      "condition_id": "0xea3b1d0099085f43a3098b3e1fbcbe62284ce1bda99384b3d46b82ff202ac016",
+      "token_id_yes": "13628189982642424912108657221169198338993179248246381972030640500448717195916",
+      "token_id_no": "91004506882941445266754771479824617369805789899332711132070603219216406556613"
+    },
+    {
+      "name": "will-the-democratic-party-control-the-senate-after-the-",
+      "condition_id": "0x307a1ed89d60b61002dd5bbf00e1408c5ed2ab3fcdb056191ca7ef9bc34d38f3",
+      "token_id_yes": "113287701564209339913693347405685749986285999146352375265161592243948562084773",
+      "token_id_no": "107118433685650702332040991454078902188473746599223732907923581436160160612542"
+    },
+    {
+      "name": "fed-rate-hike-in-2026",
+      "condition_id": "0x80b3af88cb991980e8da1ce86b9794a0957f96ec98c29319dd7ba65e9744d82b",
+      "token_id_yes": "75028752776148090296091099469912621384650554615761384992997579209329182670110",
+      "token_id_no": "93005850938352995663334573245996733794924636935158112548608169054144721737755"
+    }
+  ],
+  "shadow_executor_enabled": true,
+  "shadow_executor_verbose": false,
+  "reward_quote_size": 0,
+  "reward_target_offset_thou": 0,
+  "risk_max_gross_notional_usd": 5000.0,
+  "risk_max_position_shares": 20000.0,
+  "acr_enabled": true,
+  "acr_stale_drift_ticks": 1,
+  "acr_vol_widen_k": 0.5,
+  "acr_inv_skew_per_share_thou": 0.05,
+  "sender_cpu": -1
+}

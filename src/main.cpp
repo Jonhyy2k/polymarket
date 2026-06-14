@@ -7,6 +7,7 @@
 #include "market_metadata.hpp"
 #include "rewards.hpp"
 #include "oms.hpp"
+#include "acr.hpp"
 #include "runtime.hpp"
 #include "pipeline.hpp"
 
@@ -165,6 +166,18 @@ Config load_config(const std::string& path) {
         config.risk_max_position_shares = dv;
     if (!doc["risk_max_open_orders_total"].get_int64().get(iv))
         config.risk_max_open_orders_total = (uint32_t)iv;
+    if (!doc["acr_enabled"].get_bool().get(bv))
+        config.acr_enabled = bv;
+    if (!doc["acr_stale_drift_ticks"].get_int64().get(iv))
+        config.acr_stale_drift_ticks = (int)iv;
+    if (!doc["acr_inv_skew_per_share_thou"].get_double().get(dv))
+        config.acr_inv_skew_per_share_thou = dv;
+    if (!doc["acr_vol_widen_k"].get_double().get(dv))
+        config.acr_vol_widen_k = dv;
+    if (!doc["command_queue_capacity"].get_int64().get(iv) && iv > 0)
+        config.command_queue_capacity = (size_t)iv;
+    if (!doc["sender_cpu"].get_int64().get(iv))
+        config.sender_cpu = (int)iv;
     if (!doc["pin_thread_cpu"].get_int64().get(iv))
         config.pin_thread_cpu = (int)iv;
     if (!doc["receiver_cpu"].get_int64().get(iv))
@@ -602,6 +615,13 @@ int main(int argc, char* argv[]) {
     auto metrics_queue = std::make_unique<SpscRing<MetricsEvent>>(config.metrics_queue_capacity);
     auto opportunity_queue = std::make_unique<SpscRing<ArbOpportunity>>(config.opportunity_queue_capacity);
     auto replay_queue = std::make_unique<SpscRing<ReplaySnapshot>>(config.replay_queue_capacity);
+    // OMS(parser thread) -> cancel-sender thread. Cancels/creates leave the hot
+    // path here so ACR detection never blocks on the gateway's I/O.
+    auto command_queue = std::make_unique<SpscRing<OrderCommand>>(config.command_queue_capacity);
+    // Cancel-sender telemetry (written only by the sender thread; read after join).
+    std::atomic<bool> sender_stop{false};
+    LatencyTracker sender_send_us;
+    uint64_t sender_exec_creates = 0, sender_exec_cancels = 0;
 
     std::atomic<bool> receiver_done{false};
     std::atomic<uint64_t> dropped_oversize_messages{0};
@@ -766,6 +786,33 @@ int main(int argc, char* argv[]) {
         receiver_done = true;
     });
 
+    // Cancel-sender thread: drains the OMS command ring and executes the actual
+    // create/cancel (ShadowGateway now; LiveGateway later). Pinned, off the hot
+    // path, so ACR detection on the parser thread never blocks on I/O.
+    std::thread sender_thread([&] {
+        if (!config.shadow_executor_enabled) { return; }
+        apply_thread_runtime_tuning(
+            "sender",
+            config.sender_cpu,
+            config.realtime_priority,
+            config.prefault_stack_kb);
+        ShadowGateway exec(config.shadow_executor_verbose);
+        while (!sender_stop.load(std::memory_order_acquire) || !command_queue->empty()) {
+            OrderCommand* cmd = nullptr;
+            if (command_queue->front(cmd)) {
+                const NanoTime t_exec = now_ns();
+                if (cmd->kind == OrderCommand::Kind::CREATE) { exec.submit(cmd->order); ++sender_exec_creates; }
+                else                                          { exec.cancel(cmd->order); ++sender_exec_cancels; }
+                if (cmd->decided_ns) {
+                    sender_send_us.record(static_cast<double>(t_exec - cmd->decided_ns) / 1000.0);
+                }
+                command_queue->pop();
+            } else {
+                cpu_relax();
+            }
+        }
+    });
+
     apply_thread_runtime_tuning(
         "parser",
         config.parser_cpu >= 0 ? config.parser_cpu : config.pin_thread_cpu,
@@ -786,9 +833,11 @@ int main(int argc, char* argv[]) {
     std::vector<Orderbook*> touched_books;
     touched_books.reserve(config.contracts.size() * 2);
 
-    // Shadow liquidity-rewards executor: owns its order state on this thread.
-    // Reconciled AFTER the arb timing stamp so it never contaminates arb_us/e2e.
-    ShadowGateway shadow_gateway(config.shadow_executor_verbose);
+    // Shadow liquidity-rewards executor: owns its order state on THIS (parser)
+    // thread. Reconciled AFTER the arb timing stamp so it never contaminates
+    // arb_us/e2e. Its gateway only ENQUEUES to the sender thread (no I/O here).
+    ThreadedGateway shadow_gateway(
+        [&](const OrderCommand& c) { return command_queue->try_push_copy(c); });
     RiskLimits shadow_limits;
     shadow_limits.max_gross_notional_usd = config.risk_max_gross_notional_usd;
     shadow_limits.max_position_shares = config.risk_max_position_shares;
@@ -797,6 +846,16 @@ int main(int argc, char* argv[]) {
     double shadow_qmin_sum = 0.0;     // Σ est_qmin over reconciles (telemetry)
     uint64_t shadow_qmin_count = 0;
     double shadow_daily_pool_sum = 0.0;  // Σ daily pool over eligible markets seen
+
+    // ACR (anti-cancel-race): inline detection on this thread; cancels go out via
+    // the sender thread. acr_react_us measures trigger(book recv) -> at-risk detect.
+    AcrConfig acr_cfg;
+    acr_cfg.enabled = config.acr_enabled;
+    acr_cfg.stale_drift_ticks = config.acr_stale_drift_ticks;
+    acr_cfg.inv_skew_per_share_thou = config.acr_inv_skew_per_share_thou;
+    acr_cfg.vol_widen_k = config.acr_vol_widen_k;
+    LatencyTracker acr_react_us;   // parser-thread local; read after the loop
+    uint64_t acr_events = 0;       // book updates where a resting quote was at-risk
 
     auto collect_output = [&](const ArbCheckOutput& output, NanoTime t0_recv,
                               NanoTime t1_parse_done, NanoTime t2_books_done) -> uint16_t {
@@ -1039,10 +1098,28 @@ int main(int argc, char* argv[]) {
         // latency comparisons.
         const NanoTime t4_arb_done = config.metrics_enabled ? now_ns() : 0;
 
-        // ---- Shadow liquidity-rewards executor (post-arb, off the timing path) ----
-        // For each touched reward-active market, compute the desired two-sided
-        // quote per leg (YES/NO are independent reward markets) and reconcile.
+        // ---- Shadow liquidity-rewards executor + ACR (post-arb, off timing path) ----
+        // Per touched reward-active market, per token (YES/NO are independent reward
+        // markets): (1) ACR updates vol + checks if a resting quote is now at-risk
+        // (cancel race), (2) RewardQuoter computes the base quote, (3) ACR applies
+        // inventory skew + vol widening, (4) OMS reconciles (cancels via sender thr).
         if (config.shadow_executor_enabled) {
+            auto quote_token = [&](const std::string& tok, Orderbook& book,
+                                   const RewardConfig& rcfg, const RewardQuoteParams& params) {
+                AcrEngine::update_vol(book);
+                const uint32_t mid2 = midpoint2_thou(book);
+                const LiveSide live = shadow_oms.live_side(tok);
+                const AcrRisk risk = AcrEngine::assess(book, live, acr_cfg);
+                if (risk.any()) {
+                    ++acr_events;   // a resting quote is at-risk -> ACR cancels it now
+                    acr_react_us.record(static_cast<double>(now_ns() - slot->recv_time) / 1000.0);
+                }
+                DesiredQuotes base = RewardQuoter::quote(book, rcfg, params);
+                const double net_pos = shadow_oms.net_position(tok);
+                DesiredQuotes desired = AcrEngine::adjust(base, book, net_pos, acr_cfg);
+                shadow_oms.reconcile(tok, desired, mid2);
+                if (base.eligible) { shadow_qmin_sum += base.est_qmin; ++shadow_qmin_count; }
+            };
             for (Contract* contract : touched_contracts) {
                 if (!contract->reward_active) continue;
                 RewardConfig rcfg;
@@ -1056,14 +1133,8 @@ int main(int argc, char* argv[]) {
                     ? config.reward_quote_size : rcfg.min_size;
                 params.target_offset_thou = static_cast<Price>(config.reward_target_offset_thou);
 
-                const std::string& yes_tok = contract->token_id_yes;
-                const std::string& no_tok = contract->token_id_no;
-                DesiredQuotes yq = RewardQuoter::quote(contract->book_yes, rcfg, params);
-                DesiredQuotes nq = RewardQuoter::quote(contract->book_no, rcfg, params);
-                shadow_oms.reconcile(yes_tok, yq);
-                shadow_oms.reconcile(no_tok, nq);
-                if (yq.eligible) { shadow_qmin_sum += yq.est_qmin; ++shadow_qmin_count; }
-                if (nq.eligible) { shadow_qmin_sum += nq.est_qmin; ++shadow_qmin_count; }
+                quote_token(contract->token_id_yes, contract->book_yes, rcfg, params);
+                quote_token(contract->token_id_no, contract->book_no, rcfg, params);
                 shadow_daily_pool_sum += rcfg.daily_rate_usd;
             }
         }
@@ -1225,27 +1296,39 @@ int main(int argc, char* argv[]) {
     }
 
     if (config.shadow_executor_enabled) {
-        shadow_oms.cancel_everything();  // flat on shutdown (logs intended cancels)
-        const OmsStats& os = shadow_oms.stats();
-        const double avg_qmin = shadow_qmin_count ? shadow_qmin_sum / shadow_qmin_count : 0.0;
-        std::printf("\n[SHADOW-OMS] creates=%" PRIu64 " cancels=%" PRIu64 " replaces=%" PRIu64
-                    " risk_rejects=%" PRIu64 " fills=%" PRIu64 "\n",
-                    os.creates, os.cancels, os.replaces, os.risk_rejects, os.fills);
-        std::printf("[SHADOW-OMS] reward telemetry: avg per-quote Qmin=%.1f over %" PRIu64
-                    " eligible quotes\n", avg_qmin, shadow_qmin_count);
-        std::printf("[SHADOW-OMS] NOTE: actual USD reward = your Q_epoch / sum(all makers' Q_epoch)"
-                    " * daily pool. We do not observe competitors' Qmin, so $ is not derivable from"
-                    " shadow alone — needs live posting to measure realized share. No orders were"
-                    " sent (no keys/signing/allowances).\n");
+        shadow_oms.cancel_everything();  // flat on shutdown (enqueues final cancels)
     }
+    sender_stop.store(true, std::memory_order_release);  // let sender drain + exit
 
     g_running = false;
 
     if (receiver_thread.joinable()) {
         receiver_thread.join();
     }
+    if (sender_thread.joinable()) {
+        sender_thread.join();
+    }
     if (logger_thread.joinable()) {
         logger_thread.join();
+    }
+
+    if (config.shadow_executor_enabled) {
+        const OmsStats& os = shadow_oms.stats();
+        const double avg_qmin = shadow_qmin_count ? shadow_qmin_sum / shadow_qmin_count : 0.0;
+        const auto rstat = acr_react_us.compute();
+        const auto sstat = sender_send_us.compute();
+        std::printf("\n[SHADOW-OMS] creates=%" PRIu64 " cancels=%" PRIu64 " replaces=%" PRIu64
+                    " risk_rejects=%" PRIu64 " fills=%" PRIu64 "\n",
+                    os.creates, os.cancels, os.replaces, os.risk_rejects, os.fills);
+        std::printf("[SHADOW-OMS] reward telemetry: avg per-quote Qmin=%.1f over %" PRIu64
+                    " eligible quotes\n", avg_qmin, shadow_qmin_count);
+        std::printf("[ACR] at-risk events=%" PRIu64 " | react (trigger->detect) p50=%.2fus p99=%.2fus max=%.2fus\n",
+                    acr_events, rstat.p50, rstat.p99, rstat.max);
+        std::printf("[ACR] sender exec: creates=%" PRIu64 " cancels=%" PRIu64
+                    " | enqueue->send p50=%.2fus p99=%.2fus max=%.2fus\n",
+                    sender_exec_creates, sender_exec_cancels, sstat.p50, sstat.p99, sstat.max);
+        std::printf("[ACR] NOTE: react/send are IN-PROCESS only. Real cancel-race win = these +"
+                    " network RTT to the London engine (~10-15ms from eu-west-1). No orders sent.\n");
     }
 
     const uint64_t oversize_drops = dropped_oversize_messages.load(std::memory_order_relaxed);

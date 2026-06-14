@@ -78,7 +78,8 @@ bool Oms::passes_risk(const std::string& token_id, const RewardQuote& q, OrderSi
     return true;
 }
 
-void Oms::place(TokenBook& tb, const std::string& token_id, const RewardQuote& q, OrderSide side) {
+void Oms::place(TokenBook& tb, const std::string& token_id, const RewardQuote& q,
+                OrderSide side, uint32_t mid2) {
     ManagedOrder o{};
     o.client_id = next_client_id_++;
     o.token_id = token_id;
@@ -87,6 +88,7 @@ void Oms::place(TokenBook& tb, const std::string& token_id, const RewardQuote& q
     o.size = q.size;
     o.state = OrderState::Submitted;
     o.created_ns = now_ns();
+    o.ref_mid2 = mid2;
     if (!gateway_.submit(o)) {
         return;  // gateway refused; leave the side empty (will retry next reconcile)
     }
@@ -104,7 +106,7 @@ void Oms::drop(ManagedOrder& order, bool& has_flag) {
     has_flag = false;
 }
 
-void Oms::reconcile(const std::string& token_id, const DesiredQuotes& desired) {
+void Oms::reconcile(const std::string& token_id, const DesiredQuotes& desired, uint32_t mid2) {
     TokenBook& tb = book_for(token_id);
 
     // ---- BID side ----
@@ -115,7 +117,7 @@ void Oms::reconcile(const std::string& token_id, const DesiredQuotes& desired) {
     } else {
         if (tb.has_bid) { drop(tb.bid, tb.has_bid); ++stats_.replaces; }
         if (passes_risk(token_id, desired.bid, OrderSide::BUY)) {
-            place(tb, token_id, desired.bid, OrderSide::BUY);
+            place(tb, token_id, desired.bid, OrderSide::BUY, mid2);
         } else {
             ++stats_.risk_rejects;
         }
@@ -129,11 +131,20 @@ void Oms::reconcile(const std::string& token_id, const DesiredQuotes& desired) {
     } else {
         if (tb.has_ask) { drop(tb.ask, tb.has_ask); ++stats_.replaces; }
         if (passes_risk(token_id, desired.ask, OrderSide::SELL)) {
-            place(tb, token_id, desired.ask, OrderSide::SELL);
+            place(tb, token_id, desired.ask, OrderSide::SELL, mid2);
         } else {
             ++stats_.risk_rejects;
         }
     }
+}
+
+LiveSide Oms::live_side(const std::string& token_id) const {
+    LiveSide ls;
+    const TokenBook* tb = find_book(token_id);
+    if (!tb) return ls;
+    if (tb->has_bid) ls.bid = {true, tb->bid.price, tb->bid.ref_mid2, tb->bid.size, tb->bid.client_id};
+    if (tb->has_ask) ls.ask = {true, tb->ask.price, tb->ask.ref_mid2, tb->ask.size, tb->ask.client_id};
+    return ls;
 }
 
 void Oms::cancel_all(const std::string& token_id) {

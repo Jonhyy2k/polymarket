@@ -1,6 +1,7 @@
-// Deterministic checks for the rewards strategy + shadow OMS. No network/keys.
+// Deterministic checks for the rewards strategy + shadow OMS + ACR. No network/keys.
 #include "rewards.hpp"
 #include "oms.hpp"
+#include "acr.hpp"
 
 #include <cstdio>
 #include <cmath>
@@ -125,6 +126,60 @@ int main() {
         oms.apply_fill("T", 1, 60);  // remainder
         CHECK(approx(oms.net_position("T"), 100.0), "oms: full fill");
         CHECK(oms.open_order_count() == 1, "oms: filled order removed");
+    }
+
+    // ---- ACR: volatility EWMA rises with mid movement ----
+    {
+        Orderbook b = make_book(490, 510, 10);
+        AcrEngine::update_vol(b);            // seed last_mid
+        float v0 = b.acr_vol_thou;
+        b.best_bid = 470; b.best_ask = 490;  // mid moved 20 thou
+        AcrEngine::update_vol(b);
+        CHECK(b.acr_vol_thou > v0, "acr: vol EWMA rises after a mid move");
+    }
+
+    // ---- ACR: at-risk detection (cross + drift) ----
+    {
+        AcrConfig cfg; cfg.stale_drift_ticks = 2;
+        // book mid 500 (490/510), tick 10
+        Orderbook b = make_book(490, 510, 10);
+        // safe quotes: bid 480 (<mid), ask 520 (>mid), placed at ref mid 1000 -> not at risk
+        LiveSide ls; ls.bid = {true, 480, 1000, 100, 1}; ls.ask = {true, 520, 1000, 100, 2};
+        AcrRisk r = AcrEngine::assess(b, ls, cfg);
+        CHECK(!r.bid_at_risk && !r.ask_at_risk, "acr: safe quotes not at risk");
+
+        // bid reached mid (500 == mid) -> cross at-risk
+        LiveSide ls2; ls2.bid = {true, 500, 1000, 100, 1};
+        AcrRisk r2 = AcrEngine::assess(b, ls2, cfg);
+        CHECK(r2.bid_at_risk, "acr: bid at/above mid is at-risk (cross)");
+
+        // drift: bid placed when mid was 0.54 (ref_mid2=1080); now mid 500 (mid2=1000)
+        // mid fell 80 thou = 8 ticks >= 2-tick drift -> at risk even though bid 480<mid
+        LiveSide ls3; ls3.bid = {true, 480, 1080, 100, 1};
+        AcrRisk r3 = AcrEngine::assess(b, ls3, cfg);
+        CHECK(r3.bid_at_risk, "acr: bid at-risk when mid drifted down past threshold");
+
+        // ask reached mid -> at-risk
+        LiveSide ls4; ls4.ask = {true, 500, 1000, 100, 2};
+        AcrRisk r4 = AcrEngine::assess(b, ls4, cfg);
+        CHECK(r4.ask_at_risk, "acr: ask at/below mid is at-risk (cross)");
+    }
+
+    // ---- ACR: inventory skew shifts quotes toward flat; vol widening separates ----
+    {
+        AcrConfig cfg; cfg.inv_skew_per_share_thou = 0.1; cfg.inv_skew_max_thou = 50;
+        Orderbook b = make_book(490, 510, 10);
+        DesiredQuotes base; base.bid = {480, 100, true}; base.ask = {520, 100, true};
+        // long 200 shares -> skew = 0.1*200 = 20 thou DOWN on both sides
+        DesiredQuotes longq = AcrEngine::adjust(base, b, 200.0, cfg);
+        CHECK(longq.bid.valid && longq.bid.price < 480, "acr: long inventory lowers bid");
+        CHECK(longq.ask.valid && longq.ask.price < 520, "acr: long inventory lowers ask (sell easier)");
+
+        AcrConfig vcfg; vcfg.vol_widen_k = 1.0; vcfg.vol_widen_max_thou = 30;
+        b.acr_vol_thou = 15.0f;  // -> widen 15 thou (snapped to tick)
+        DesiredQuotes wq = AcrEngine::adjust(base, b, 0.0, vcfg);
+        CHECK(wq.bid.valid && wq.bid.price < 480, "acr: vol widening lowers bid");
+        CHECK(wq.ask.valid && wq.ask.price > 520, "acr: vol widening raises ask");
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "ALL PASS" : "FAILURES PRESENT");

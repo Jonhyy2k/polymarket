@@ -9,8 +9,10 @@ A low-latency C++ system for Polymarket's CLOB **v2** that does two things:
 2. **Shadow liquidity-rewards maker** — a market-making *executor in shadow mode*
    that computes reward-qualifying two-sided quotes and runs them through a full
    order-management state machine **without sending anything** (no keys, no
-   network orders, no money). Built to evaluate the LP-rewards strategy before
-   any live capital.
+   network orders, no money). Includes an **Anti-Cancel-Race (ACR)** engine
+   (fast defensive cancels + inventory skew + volatility-aware quoting) with a
+   dedicated cancel-sender thread. Built to evaluate the LP-rewards strategy
+   before any live capital.
 
 > **This is NOT a live trading bot.** There is no order signing, no API auth, no
 > on-chain allowances, no money at risk. Everything that touches the exchange is
@@ -28,6 +30,7 @@ A low-latency C++ system for Polymarket's CLOB **v2** that does two things:
 - [V2 hardening (what changed & was fixed)](#v2-hardening)
 - [Geography / latency](#geography--latency)
 - [Liquidity-rewards maker (shadow)](#liquidity-rewards-maker-shadow)
+- [Anti-Cancel-Race (ACR)](#anti-cancel-race-acr)
 - [Strategy economics (rough, honest)](#strategy-economics-rough-honest)
 - [Configuration reference](#configuration-reference)
 - [Tools](#tools)
@@ -51,12 +54,16 @@ A low-latency C++ system for Polymarket's CLOB **v2** that does two things:
 | Liquidity-rewards quoting strategy | ✅ shadow, unit-tested |
 | OMS (lifecycle, risk gate, fills) | ✅ shadow, unit-tested |
 | Shadow fill simulator + net estimate | ✅ built & validated |
+| **ACR engine** (at-risk detect, skew, vol-width) | ✅ shadow, unit-tested |
+| **Threaded cancel-sender** (SPSC ring, pinned) | ✅ built, sub-µs hand-off |
 | **Live execution (signing/auth/allowances)** | ❌ **not built — gated** |
 | Fill-probability model (trustworthy net) | ❌ needs long capture / live data |
 
 Latency (laptop, in-process `t0→t3`): parse p50 ~1.2µs, book p50 ~0.3µs, arb
-p50 ~0.6µs, e2e p50 ~3.5µs. **Feed delivery from Lisbon: ~44ms floor / ~90ms p50**
-— the network dominates the in-process pipeline by ~4 orders of magnitude.
+p50 ~0.6µs, e2e p50 ~3.5µs; OMS→sender hand-off p50 0.36µs / p99 2.2µs.
+**The matching engine is in London (AWS eu-west-2)**; feed delivery and order
+RTT are network-bound (see [Geography](#geography--latency)) and dominate the
+in-process pipeline by ~4 orders of magnitude.
 
 ---
 
@@ -94,7 +101,7 @@ python3 tools/build_live_config.py config.live.json 16
 
 ### Tests
 ```bash
-./build/test_executor      # 25 deterministic checks: scoring, Qmin, quoting, OMS, risk, fills
+./build/test_executor   # 39 deterministic checks: scoring, Qmin, quoting, OMS, risk, fills, ACR
 ```
 
 ---
@@ -110,17 +117,23 @@ locks on the hot path.
    [receiver thread]  ── stamps recv steady+wall clock
         │ SPSC (MessageSlot ring)
         ▼
-   [parser thread]  ── simdjson in-place parse → order book update → arb check
-        │                └─ shadow rewards executor (post-arb, off timing path)
-        │ SPSC (metrics / opportunities / replay rings)
-        ▼
-   [logger thread]  ── CSV + periodic summary (latency, edges, P&L, feed delivery)
+   [parser thread]  ── simdjson in-place parse → book update → arb check
+        │                └─ shadow rewards executor + ACR (post-arb, off timing path)
+        │                      │ SPSC (OrderCommand ring)        │ SPSC (metrics/opp/replay)
+        │                      ▼                                 ▼
+        │              [cancel-sender thread]            [logger thread]
+        │               ShadowGateway (logs;              CSV + periodic summary
+        │               LiveGateway later)                (latency, edges, P&L, feed)
 ```
 
 - **Zero-copy ingest**: raw WS frame → `memcpy` into a pre-padded simdjson buffer.
 - **Order book**: dense `size_by_price[1001]` array with an epoch trick for O(1)
   clears, plus a **1024-bit occupancy bitmap** so best-bid/ask is a few word ops
   (`clz`/`ctz`) instead of a 1001-slot linear scan.
+- **ACR detection runs inline** on the parser thread (no thread hop on the
+  critical path); the cancel/create **send is offloaded** to a pinned cancel-sender
+  thread via an SPSC `OrderCommand` ring, so the hot path never blocks on I/O.
+  OMS order state stays single-threaded (parser-owned) — no locks.
 - **Threads pinned** to configurable CPUs; optional RT priority, mlock, stack
   prefault.
 
@@ -177,22 +190,42 @@ Live v2 market-channel schema is documented in
 
 ## Geography / latency
 
-The dominant lever is **not** in-process µs — it's the network. The binary stamps
-`CLOCK_REALTIME` at WS receipt and reports `Feed deliv (ms)` = `recv_wall −
-newest event.timestamp`.
+The dominant lever is **not** in-process µs — it's the network. In-process is
+single-digit µs; the network is tens of milliseconds, ~4 orders larger.
 
-- **Lisbon residential baseline: floor ~44ms, p50 ~90ms.** With a ~2ms edge RTT,
-  that floor means Polymarket's origin is **transatlantic (≈ us-east-1)**.
-- In-process e2e is ~3.5µs → feed delivery is **~40,000× larger.**
-- **The trap:** the only location that wins (us-east-1, ~single-digit ms) is where
-  Polymarket geo-blocks users; UK (eu-west-2) is also blocked. eu-west-1 (Ireland)
-  mainly removes residential *jitter* (p50 → ~45ms), not the ~35–40ms transatlantic
-  *floor*. Run the same binary per region to A/B; keep clocks chrony/NTP-synced
-  (the delta includes skew).
+**The matching engine is in London (AWS eu-west-2).** Established by a
+clock-*independent* warm round-trip from Lisbon to the CLOB origin = **47.6 ms**
+(≈ London 35 ms RTT + ~12 ms server processing; us-east-1 measures 125 ms and is
+ruled out), corroborated by public infra write-ups. Settlement is on Polygon via
+the CTF Exchange contract; the API is **Cloudflare-fronted** (everyone hits a CF
+edge — no raw sub-Cloudflare access for anyone).
 
-**Implication for strategy:** a transatlantic operator cannot win latency races
-(taker arb). The viable game is the **maker/rewards** business, where being 40ms
-vs 5ms from the feed matters far less than inventory and fill modeling.
+> ⚠️ **Correction:** earlier notes in this repo's history said "us-east". That came
+> from the one-way `Feed deliv (ms)` floor (~44 ms), which was inflated by ~25 ms of
+> **laptop NTP clock skew**. The clock-independent round-trip (immune to skew) is the
+> reliable measure and says **London**. Trust round-trip, not skewed one-way.
+
+**Maker lifecycle latency, from the Lisbon laptop (measured RTT):**
+
+| step | Lisbon (now) | Ireland eu-west-1 | London eu-west-2 (banned to run) |
+|---|---|---|---|
+| see a book update (engine → you) | ~17–18 ms | ~5 ms | ~1 ms |
+| post a quote (decision → resting at engine) | ~18–22 ms | ~6–8 ms | ~2 ms |
+| learn of a fill (engine → you) | ~17–18 ms | ~5 ms | ~1 ms |
+| **tick-to-react** (move at engine → your cancel back at engine) | **~35 ms** | **~10 ms** | ~2 ms |
+
+In-process work (~5 µs host total) is buried inside each row — it rounds to zero.
+
+**Deployment:** the engine is in London but **London (eu-west-2) is geo-banned to
+run from**, so the fastest *compliant* spot is **Ireland (eu-west-1, ~10–12 ms
+RTT)** — or Amsterdam/Frankfurt (~10–15 ms). Ireland cuts tick-to-react ~35 ms →
+~10 ms, which is what turns ACR from "always picked off" into "competitive". Run
+the same binary per region to A/B; run **chrony** and trust the round-trip number.
+
+**Implication:** latency *is* winnable from Europe (it was never transatlantic).
+Kernel bypass / io_uring / busy-poll save *microseconds* on the host send path —
+noise against the ms network. The decisive lever is **location** (Lisbon → Ireland),
+not host micro-optimization.
 
 ---
 
@@ -216,8 +249,10 @@ daily in USDC. Read config from `GET clob.polymarket.com/markets/{cid}` →
   within `max_spread`, ≥ `min_size`; computes estimated Qmin.
 - `oms.{hpp,cpp}` — order lifecycle state machine, client IDs, desired-vs-live
   reconcile (idempotent; cancel+recreate on change), **inline risk gate** (gross
-  notional, position cap, max open orders, kill switch), fills→position.
-  `ShadowGateway` logs intended actions; `IExecGateway` is the seam for a future
+  notional, position cap, max open orders, kill switch), fills→position. The OMS
+  talks to a `ThreadedGateway` that **enqueues** create/cancel commands to the
+  cancel-sender thread (state stays single-threaded). `ShadowGateway` (on the
+  sender side) logs intended actions; `IExecGateway` is the seam for a future
   `LiveGateway`.
 - `tools/fill_sim.py` — live-replays reward markets, posts the quotes, models
   fills from public trades + queue position, marks adverse selection at +30s, and
@@ -226,6 +261,43 @@ daily in USDC. Read config from `GET clob.polymarket.com/markets/{cid}` →
 **Important real-world finding:** the rewards program lives on **sports / politics
 / event** markets, **not** the crypto up/down markets (those report `rates:null`).
 So the rewards maker targets a different universe than the scanner.
+
+---
+
+## Anti-Cancel-Race (ACR)
+
+A maker quoting near mid gets *picked off* when the market moves: a taker lifts
+your now-stale order right before the price moves against you (adverse selection).
+ACR is the defensive layer that **cancels at-risk quotes fast** and quotes more
+conservatively when it's dangerous. `src/acr.hpp` (header-only, inlines on the hot
+path):
+
+- **At-risk detection** — a resting quote is flagged when it has reached/crossed
+  the mid, *or* the mid has drifted ≥ N ticks against it since it was placed →
+  urgent cancel. Runs **inline on the parser thread** (no thread hop).
+- **Inventory skew** — when net-long, shift both quotes down (ask cheaper = sell
+  easier, bid cheaper = buy harder) to mean-revert toward flat.
+- **Volatility widening** — an EWMA of `|Δmid|` pushes quotes further from mid when
+  the market is moving fast, so a jump is less likely to fill you.
+
+**Threading:** detection is inline (lowest latency); the cancel **send** is
+offloaded to the pinned cancel-sender thread via an SPSC `OrderCommand` ring.
+Measured in-process hand-off (OMS decide → sender send): **p50 0.36 µs / p99
+2.2 µs**. Reaction (book recv → at-risk detect) is sub-µs.
+
+**Honest caveats:**
+- The in-process µs is *not* the cancel time. The real cancel = detect + hand-off
+  + sign + **network RTT to London** + engine processing. From Lisbon, tick-to-react
+  is **~35 ms** (network-bound) → ACR can't win the race from a laptop. From
+  **eu-west-1 it's ~10 ms** and the race becomes winnable. ACR's value is gated by
+  *location* (see [Geography](#geography--latency)).
+- ACR's urgent cancel matters most when re-quoting is **throttled** (live rate
+  limits / queue-priority preservation). With re-quote-every-tick (the shadow
+  default) the base reconcile re-centers before drift builds, so at-risk rarely
+  fires — the unit tests prove detection works on real moves.
+
+39 deterministic checks in `test_executor` cover scoring/Qmin/quoting/OMS/risk/
+fills + ACR (vol EWMA, at-risk cross & drift, skew, vol-widen).
 
 ---
 
@@ -282,10 +354,16 @@ JSON (see `config.strategy.json`). Selected keys:
 | **`risk_max_gross_notional_usd`** | OMS pre-trade gross cap |
 | **`risk_max_position_shares`** | OMS per-token position cap |
 | **`risk_max_open_orders_total`** | OMS open-order cap |
+| **`acr_enabled`** | run the Anti-Cancel-Race engine |
+| **`acr_stale_drift_ticks`** | cancel when mid drifts this many ticks against a quote |
+| **`acr_inv_skew_per_share_thou`** | quote shift per share of inventory (flattening) |
+| **`acr_vol_widen_k`** | widen each side by `k × mid-vol EWMA` |
+| **`command_queue_capacity`** | OMS → cancel-sender ring size |
+| **`sender_cpu`** | cancel-sender thread pinning (−1 = unpinned) |
 
 Example configs in the repo: `config.live.json` (crypto scanner),
-`config.rewards.json` (reward-active maker), `config.quiet.json` (WS timeout test),
-`config.strategy.json` (base settings).
+`config.rewards.json` (reward-active maker), `config.acr.json` (maker + ACR),
+`config.quiet.json` (WS timeout test), `config.strategy.json` (base settings).
 
 ---
 
@@ -296,6 +374,7 @@ Example configs in the repo: `config.live.json` (crypto scanner),
 | `tools/build_live_config.py` | build a crypto scanner config from gamma (tag_id=21) |
 | `tools/ws_schema_dump.py` | capture raw v2 WS frames → `ws_raw_frames.jsonl` |
 | `tools/fill_sim.py` | shadow fill simulator + net-PnL estimate (reward markets) |
+| `tools/hedge_arb_test.py` | live paper test for buy/sell-both free-arb (proves no taker free lunch) |
 
 All gamma/CLOB calls need a `User-Agent` header (else 403).
 To build a rewards config, select reward-active markets from
@@ -313,16 +392,19 @@ src/
   orderbook.{hpp,cpp} dense ladder + occupancy bitmap best-tracking
   arbitrage.{hpp,cpp} taker/maker/group arb checks, fail-closed fees
   rewards.{hpp,cpp}   liquidity-rewards quoting strategy (scoring + quoter)   [maker]
-  oms.{hpp,cpp}       order management state machine + risk gate + shadow gateway [maker]
+  oms.{hpp,cpp}       OMS state machine + risk gate + ThreadedGateway/ShadowGateway [maker]
+  acr.hpp             Anti-Cancel-Race engine (header-only: at-risk, skew, vol-width) [maker]
   market_metadata.*   gamma fee/tick fetch + ClobRewardsClient (reward config)
   logger.{hpp,cpp}    CSV + summary (latency incl. feed-delivery, edges, P&L)
-  pipeline.hpp        SPSC ring, MessageSlot, MetricsEvent
+  pipeline.hpp        SPSC ring, MessageSlot, MetricsEvent, OrderCommand
   types.hpp           Price/Size/book/contract/config structs, clocks
 tests/
-  test_executor.cpp   25 deterministic checks (strategy + OMS)
-tools/                config builders, schema dump, fill simulator
+  test_executor.cpp   39 deterministic checks (strategy + OMS + ACR)
+tools/                config builders, schema dump, fill simulator, hedge-arb test
 deploy/setup_ec2.sh   provision a fresh EC2 box
 ```
+
+Repository: <https://github.com/Jonhyy2k/polymarket> (local dir `polymarket-clob`).
 
 ---
 
@@ -403,11 +485,15 @@ Until then: scanner is read-only; maker is shadow-only.
 
 1. **Capture-to-disk + offline replay** for `fill_sim.py` (hours/days) → a
    trustworthy net-of-adverse-selection number. *(Zero risk; do first.)*
-2. Geography A/B (eu-west-1 vs others) using the `Feed deliv (ms)` line.
+2. **Deploy to Ireland (eu-west-1)** — the engine is London (eu-west-2, banned to
+   run from), so eu-west-1 (~10–12 ms) is the fastest compliant spot and is what
+   makes ACR's cancel-race winnable. A/B vs Amsterdam/Frankfurt with the binary
+   (use round-trip, not the skew-prone one-way; run chrony).
 3. Validate the v2 fee formula against a non-zero `last_trade_price.fee_rate_bps`.
 4. Live execution milestone (only after clearance) — see above.
-5. Kernel bypass / CPU isolation — only worthwhile after geography, and likely
-   never for a transatlantic maker.
+5. Kernel bypass / busy-poll / CPU isolation — saves only host µs (noise vs the ms
+   network); do *after* the Ireland move, and only if profiling says host time
+   matters at that location.
 
 ---
 

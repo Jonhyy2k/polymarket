@@ -98,6 +98,10 @@ struct alignas(64) Orderbook {
     uint64_t   touched_frame_id = 0;
     Price      tick_thou     = 0;     // min price increment in thousandths (0 = unknown)
     uint64_t   last_hash     = 0;     // FNV-1a of last book/price_change hash (gap detection)
+    // ACR (anti-cancel-race): EWMA of |Δmid| (×2 space) to widen quotes when the
+    // market moves fast, plus the last mid×2 for the delta.
+    uint32_t   acr_last_mid2 = 0;
+    float      acr_vol_thou  = 0.0f;
 };
 
 struct Contract {
@@ -233,6 +237,13 @@ struct Config {
     double      risk_max_gross_notional_usd = 1000.0;
     double      risk_max_position_shares = 5000.0;
     uint32_t    risk_max_open_orders_total = 64;
+    // ACR (anti-cancel-race): fast defensive cancels + skew/vol quoting.
+    bool        acr_enabled = true;
+    int         acr_stale_drift_ticks = 1;        // cancel when mid drifts this many ticks against a quote
+    double      acr_inv_skew_per_share_thou = 0.0;// quote shift per share of inventory (flattening)
+    double      acr_vol_widen_k = 0.0;            // widen each side by k * mid-vol EWMA
+    size_t      command_queue_capacity = 1024;    // OMS -> sender-thread ring
+    int         sender_cpu = -1;                  // cancel-sender thread pinning
     int         pin_thread_cpu = -1;
     int         receiver_cpu = 2;
     int         parser_cpu = 4;

@@ -60,6 +60,7 @@ struct ManagedOrder {
     Size        filled = 0;
     OrderState  state = OrderState::Intended;
     NanoTime    created_ns = 0;
+    uint32_t    ref_mid2 = 0;         // mid×2 when placed (ACR drift detection)
     // exchange_order_id, salt, nonce, signature filled in by the live gateway.
     std::string exchange_order_id;
 
@@ -108,6 +109,43 @@ private:
     uint64_t canceled_ = 0;
 };
 
+// A command handed from the OMS (parser thread) to the cancel-sender thread via
+// an SPSC ring, so the hot path never blocks on the gateway's I/O. decided_ns is
+// stamped at enqueue to measure decision->execute (in-process send) latency.
+struct OrderCommand {
+    enum class Kind : uint8_t { CREATE, CANCEL };
+    Kind         kind = Kind::CREATE;
+    ManagedOrder order;
+    NanoTime     decided_ns = 0;
+};
+
+// Gateway used BY the OMS that just enqueues commands (via a sink) for the sender
+// thread to execute. Keeps order-state mutation single-threaded (parser thread)
+// while the actual send (ShadowGateway now, LiveGateway later) runs off-path.
+class ThreadedGateway : public IExecGateway {
+public:
+    using Sink = std::function<bool(const OrderCommand&)>;
+    explicit ThreadedGateway(Sink sink) : sink_(std::move(sink)) {}
+    bool submit(const ManagedOrder& o) override {
+        return sink_(OrderCommand{OrderCommand::Kind::CREATE, o, now_ns()});
+    }
+    bool cancel(const ManagedOrder& o) override {
+        return sink_(OrderCommand{OrderCommand::Kind::CANCEL, o, now_ns()});
+    }
+private:
+    Sink sink_;
+};
+
+// Read-only snapshot of our resting orders on one token, for the ACR engine.
+struct LiveQuoteRef {
+    bool     has = false;
+    Price    price = 0;
+    uint32_t ref_mid2 = 0;   // mid×2 when placed
+    Size     size = 0;
+    uint64_t client_id = 0;
+};
+struct LiveSide { LiveQuoteRef bid, ask; };
+
 struct OmsStats {
     uint64_t creates = 0;
     uint64_t cancels = 0;
@@ -124,8 +162,12 @@ public:
 
     // Diff desired two-sided quote vs current live orders for one token; emit the
     // minimal set of cancel/create actions (cancel-then-create on any price/size
-    // change). Idempotent: identical desired vs live => no action.
-    void reconcile(const std::string& token_id, const DesiredQuotes& desired);
+    // change). Idempotent: identical desired vs live => no action. mid2 (mid×2 of
+    // the token's book) is stamped on placed orders for ACR drift detection.
+    void reconcile(const std::string& token_id, const DesiredQuotes& desired, uint32_t mid2 = 0);
+
+    // Snapshot of our resting orders for a token (for the ACR engine).
+    LiveSide live_side(const std::string& token_id) const;
 
     // Cancel every live order for a token (used on shutdown / resync / kill).
     void cancel_all(const std::string& token_id);
@@ -148,7 +190,8 @@ private:
     };
 
     bool passes_risk(const std::string& token_id, const RewardQuote& q, OrderSide side);
-    void place(TokenBook& tb, const std::string& token_id, const RewardQuote& q, OrderSide side);
+    void place(TokenBook& tb, const std::string& token_id, const RewardQuote& q,
+               OrderSide side, uint32_t mid2);
     void drop(ManagedOrder& order, bool& has_flag);
 
     IExecGateway& gateway_;
