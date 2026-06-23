@@ -102,6 +102,10 @@ struct alignas(64) Orderbook {
     // market moves fast, plus the last mid×2 for the delta.
     uint32_t   acr_last_mid2 = 0;
     float      acr_vol_thou  = 0.0f;
+    // Adaptive quote throttle (live rate-limit / queue-priority preservation):
+    // last reconcile time + current adaptive cadence for this token's book.
+    uint64_t   thr_last_quote_ns = 0;
+    uint32_t   thr_interval_ms   = 0;
 };
 
 struct Contract {
@@ -232,11 +236,29 @@ struct Config {
     // Liquidity-rewards shadow executor (no keys/sends; logs intended orders).
     bool        shadow_executor_enabled = false;
     bool        shadow_executor_verbose = false;
+    // Execution mode: "shadow" (log only), "mocklive" (build v2 order + EIP-712
+    // digest, no key/sign/send), or "live" (gated, not built). Selects the
+    // gateway on the cancel-sender thread; the OMS/ACR/risk path is mode-agnostic.
+    std::string exec_mode = "shadow";
+    std::string live_maker_address  = "0x0000000000000000000000000000000000000000";
+    std::string live_signer_address = "0x0000000000000000000000000000000000000000";
+    int         live_signature_type = 0;          // 0 EOA, 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE
+    std::string near_miss_live_log_file = "logs/near_miss_live.csv";
     uint32_t    reward_quote_size = 0;            // 0 => use each market's min_size
     uint32_t    reward_target_offset_thou = 0;    // 0 => tightest (1 tick)
     double      risk_max_gross_notional_usd = 1000.0;
     double      risk_max_position_shares = 5000.0;
     uint32_t    risk_max_open_orders_total = 64;
+    double      risk_pusd_allowance_usd = 0.0;    // simulated pUSD allowance (0 = unlimited)
+    // Adaptive quote throttle (suppress re-pricing churn between book moves).
+    bool        quote_throttle_enabled = false;
+    uint32_t    quote_throttle_min_ms = 5;
+    uint32_t    quote_throttle_max_ms = 100;
+    double      quote_throttle_vol_hot_thou = 2.0; // acr_vol_thou above this => volatile
+    // Quote telemetry capture (Roadmap #1: groundwork for adverse-selection net).
+    bool        quote_telemetry_enabled = false;
+    std::string quote_telemetry_log_file = "logs/quote_telemetry.csv";
+    size_t      quote_telemetry_queue_capacity = 8192;
     // ACR (anti-cancel-race): fast defensive cancels + skew/vol quoting.
     bool        acr_enabled = true;
     int         acr_stale_drift_ticks = 1;        // cancel when mid drifts this many ticks against a quote
@@ -244,6 +266,10 @@ struct Config {
     double      acr_vol_widen_k = 0.0;            // widen each side by k * mid-vol EWMA
     size_t      command_queue_capacity = 1024;    // OMS -> sender-thread ring
     int         sender_cpu = -1;                  // cancel-sender thread pinning
+    int         sender_priority = 0;              // cancel-sender RT priority (SCHED_FIFO)
+    // WebSocket transport A/B knobs (network-bound; measure, don't assume).
+    bool        ws_tls13_enabled = true;          // generic TLS context (negotiates up to 1.3)
+    bool        ws_permessage_deflate = false;    // negotiate WS compression (helps bootstrap burst)
     int         pin_thread_cpu = -1;
     int         receiver_cpu = 2;
     int         parser_cpu = 4;

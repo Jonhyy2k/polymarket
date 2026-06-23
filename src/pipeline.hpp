@@ -46,6 +46,31 @@ struct MetricsEvent {
     int16_t  net_edge_bps = 0;
 };
 
+// Per-reconcile snapshot for the quote-telemetry CSV (Roadmap #1: the raw data
+// to later measure adverse selection / net-of-fill). Pushed from the executor
+// (parser thread) and drained by the logger thread — off the hot timing path.
+// token is a string_view into the Contract's token_id (process-lifetime stable),
+// same pattern as ArbOpportunity::contract_name.
+struct QuoteTelemetryEvent {
+    NanoTime         sample_ns = 0;
+    std::string_view token;
+    uint16_t         mid_thou    = 0;
+    uint16_t         spread_thou = 0;
+    uint16_t         bid_px      = 0;
+    uint16_t         ask_px      = 0;
+    float            est_qmin    = 0.0f;
+    float            net_position = 0.0f;
+    float            vol_thou    = 0.0f;
+    int16_t          bid_dist_thou = 0;   // signed distance of bid from mid (thou)
+    int16_t          ask_dist_thou = 0;
+    bool             bid_at_risk = false;
+    bool             ask_at_risk = false;
+    bool             off_grid    = false;
+    bool             too_wide    = false;
+    bool             eligible    = false;
+    bool             neg_risk    = false;
+};
+
 struct alignas(64) MessageSlot {
     size_t   len = 0;
     NanoTime recv_time = 0;       // steady_clock at receipt (pipeline timing)

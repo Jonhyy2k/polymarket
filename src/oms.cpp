@@ -69,6 +69,10 @@ bool Oms::passes_risk(const std::string& token_id, const RewardQuote& q, OrderSi
     }
     if (gross > limits_.max_gross_notional_usd) return false;
 
+    // Simulated pUSD allowance: gross resting notional must fit the approved
+    // collateral (a hard wallet constraint, distinct from the strategy cap above).
+    if (limits_.max_collateral_usd > 0.0 && gross > limits_.max_collateral_usd) return false;
+
     // Don't add inventory in the direction that breaches the position cap.
     const TokenBook* tb = find_book(token_id);
     const double pos = tb ? tb->net_position : 0.0;
@@ -79,7 +83,7 @@ bool Oms::passes_risk(const std::string& token_id, const RewardQuote& q, OrderSi
 }
 
 void Oms::place(TokenBook& tb, const std::string& token_id, const RewardQuote& q,
-                OrderSide side, uint32_t mid2) {
+                OrderSide side, uint32_t mid2, bool neg_risk) {
     ManagedOrder o{};
     o.client_id = next_client_id_++;
     o.token_id = token_id;
@@ -89,6 +93,7 @@ void Oms::place(TokenBook& tb, const std::string& token_id, const RewardQuote& q
     o.state = OrderState::Submitted;
     o.created_ns = now_ns();
     o.ref_mid2 = mid2;
+    o.neg_risk = neg_risk;
     if (!gateway_.submit(o)) {
         return;  // gateway refused; leave the side empty (will retry next reconcile)
     }
@@ -106,7 +111,8 @@ void Oms::drop(ManagedOrder& order, bool& has_flag) {
     has_flag = false;
 }
 
-void Oms::reconcile(const std::string& token_id, const DesiredQuotes& desired, uint32_t mid2) {
+void Oms::reconcile(const std::string& token_id, const DesiredQuotes& desired,
+                    uint32_t mid2, bool neg_risk) {
     TokenBook& tb = book_for(token_id);
 
     // ---- BID side ----
@@ -117,7 +123,7 @@ void Oms::reconcile(const std::string& token_id, const DesiredQuotes& desired, u
     } else {
         if (tb.has_bid) { drop(tb.bid, tb.has_bid); ++stats_.replaces; }
         if (passes_risk(token_id, desired.bid, OrderSide::BUY)) {
-            place(tb, token_id, desired.bid, OrderSide::BUY, mid2);
+            place(tb, token_id, desired.bid, OrderSide::BUY, mid2, neg_risk);
         } else {
             ++stats_.risk_rejects;
         }
@@ -131,7 +137,7 @@ void Oms::reconcile(const std::string& token_id, const DesiredQuotes& desired, u
     } else {
         if (tb.has_ask) { drop(tb.ask, tb.has_ask); ++stats_.replaces; }
         if (passes_risk(token_id, desired.ask, OrderSide::SELL)) {
-            place(tb, token_id, desired.ask, OrderSide::SELL, mid2);
+            place(tb, token_id, desired.ask, OrderSide::SELL, mid2, neg_risk);
         } else {
             ++stats_.risk_rejects;
         }

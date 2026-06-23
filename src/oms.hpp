@@ -23,6 +23,23 @@
 #include <vector>
 #include <functional>
 
+// Execution mode. The OMS, reconcile, risk gate, ACR and inventory logic are all
+// mode-AGNOSTIC — they only ever see an IExecGateway. The mode just selects which
+// gateway is constructed on the send (cancel-sender) thread:
+//   Shadow   — log intended actions only (no keys/serialization/network).
+//   MockLive — build the v2 order + EIP-712 digest (no key, no signature, no send).
+//   Live     — real signer + CLOB POST (NOT built; gated on compliance/custody).
+enum class ExecMode : uint8_t { Shadow, MockLive, Live };
+
+inline const char* exec_mode_name(ExecMode m) noexcept {
+    switch (m) {
+        case ExecMode::Shadow:   return "shadow";
+        case ExecMode::MockLive: return "mocklive";
+        case ExecMode::Live:     return "live";
+    }
+    return "?";
+}
+
 enum class OrderSide : uint8_t { BUY, SELL };
 
 enum class OrderState : uint8_t {
@@ -61,6 +78,7 @@ struct ManagedOrder {
     OrderState  state = OrderState::Intended;
     NanoTime    created_ns = 0;
     uint32_t    ref_mid2 = 0;         // mid×2 when placed (ACR drift detection)
+    bool        neg_risk = false;     // market is neg-risk -> selects the v2 EIP-712 domain
     // exchange_order_id, salt, nonce, signature filled in by the live gateway.
     std::string exchange_order_id;
 
@@ -78,6 +96,11 @@ struct RiskLimits {
     size_t max_open_orders_total     = 64;
     double max_gross_notional_usd    = 1000.0;
     double max_position_shares       = 5000.0; // |net position| per token
+    // Simulated pUSD collateral allowance: total gross notional of resting orders
+    // may not exceed the wallet's approved/available pUSD. 0 => unlimited (off).
+    // First-order proxy of the on-chain constraint (does not yet model fills
+    // consuming collateral, nor the YES/NO USDC-both-sides netting). See README.
+    double max_collateral_usd        = 0.0;
     bool   kill_switch               = false;
 };
 
@@ -164,7 +187,8 @@ public:
     // minimal set of cancel/create actions (cancel-then-create on any price/size
     // change). Idempotent: identical desired vs live => no action. mid2 (mid×2 of
     // the token's book) is stamped on placed orders for ACR drift detection.
-    void reconcile(const std::string& token_id, const DesiredQuotes& desired, uint32_t mid2 = 0);
+    void reconcile(const std::string& token_id, const DesiredQuotes& desired,
+                   uint32_t mid2 = 0, bool neg_risk = false);
 
     // Snapshot of our resting orders for a token (for the ACR engine).
     LiveSide live_side(const std::string& token_id) const;
@@ -191,7 +215,7 @@ private:
 
     bool passes_risk(const std::string& token_id, const RewardQuote& q, OrderSide side);
     void place(TokenBook& tb, const std::string& token_id, const RewardQuote& q,
-               OrderSide side, uint32_t mid2);
+               OrderSide side, uint32_t mid2, bool neg_risk);
     void drop(ManagedOrder& order, bool& has_flag);
 
     IExecGateway& gateway_;
