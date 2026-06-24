@@ -211,6 +211,13 @@ Config load_config(const std::string& path) {
         config.quote_telemetry_log_file = std::string(sv);
     if (!doc["quote_telemetry_queue_capacity"].get_int64().get(iv) && iv > 0)
         config.quote_telemetry_queue_capacity = (size_t)iv;
+    // Live-safety + reward-rotation.
+    if (!doc["dead_mans_switch_seconds"].get_int64().get(iv))
+        config.dead_mans_switch_seconds = (int)iv;
+    if (!doc["reward_refresh_seconds"].get_int64().get(iv))
+        config.reward_refresh_seconds = (int)iv;
+    if (!doc["reward_update_queue_capacity"].get_int64().get(iv) && iv > 0)
+        config.reward_update_queue_capacity = (size_t)iv;
     // WebSocket transport A/B.
     if (!doc["ws_tls13_enabled"].get_bool().get(bv))
         config.ws_tls13_enabled = bv;
@@ -660,6 +667,9 @@ int main(int argc, char* argv[]) {
     auto quote_telemetry_queue =
         std::make_unique<SpscRing<QuoteTelemetryEvent>>(config.quote_telemetry_queue_capacity);
     std::atomic<uint64_t> dropped_quote_telemetry{0};
+    // Reward-refresh thread -> parser thread (markets going rates:null mid-session).
+    auto reward_update_queue =
+        std::make_unique<SpscRing<RewardConfigUpdate>>(config.reward_update_queue_capacity);
     // Cancel-sender telemetry (written only by the sender thread; read after join).
     std::atomic<bool> sender_stop{false};
     LatencyTracker sender_send_us;
@@ -922,6 +932,31 @@ int main(int argc, char* argv[]) {
         }
     });
 
+    // Reward-config refresh thread: markets rotate (rates:null) mid-session; re-fetch
+    // each market every reward_refresh_seconds and hand updates to the parser thread
+    // via an SPSC ring (parser is the sole writer of Contract reward fields — no lock
+    // on the hot read path). Off by default (reward_refresh_seconds=0).
+    std::thread reward_refresh_thread([&] {
+        if (!config.shadow_executor_enabled || config.reward_refresh_seconds <= 0) return;
+        apply_thread_runtime_tuning("reward-refresh", -1, 0, config.prefault_stack_kb);
+        ClobRewardsClient client;
+        while (g_running) {
+            for (int s = 0; s < config.reward_refresh_seconds && g_running; ++s)
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            if (!g_running) break;
+            for (size_t i = 0; i < config.contracts.size(); ++i) {
+                if (config.contracts[i].condition_id.empty()) continue;
+                RewardConfigRaw rc;
+                std::string err;
+                if (!client.fetch(config.contracts[i].condition_id, rc, err)) continue;  // keep last
+                RewardConfigUpdate u{static_cast<uint32_t>(i), rc.active,
+                                     static_cast<uint16_t>(rc.max_spread_thou),
+                                     static_cast<uint32_t>(rc.min_size), rc.daily_rate_usd};
+                reward_update_queue->try_push_copy(u);  // drop if full; re-sent next cycle
+            }
+        }
+    });
+
     apply_thread_runtime_tuning(
         "parser",
         config.parser_cpu >= 0 ? config.parser_cpu : config.pin_thread_cpu,
@@ -953,6 +988,18 @@ int main(int argc, char* argv[]) {
     shadow_limits.max_open_orders_total = config.risk_max_open_orders_total;
     shadow_limits.max_collateral_usd = config.risk_pusd_allowance_usd;  // pUSD allowance sim
     Oms shadow_oms(shadow_gateway, shadow_limits);
+
+    // Startup reconciliation seam: a LiveGateway rebuilds OMS state from the
+    // account's open orders so a restart/crash doesn't orphan resting orders.
+    // No-op for shadow/mock (no exchange state) — this is the live plug-in point.
+    if (config.shadow_executor_enabled) {
+        std::vector<ManagedOrder> resting;
+        if (exec_ptr->adopt_open_orders(resting)) {
+            std::printf("[OMS] startup reconciliation: %zu resting order(s) to adopt\n",
+                        resting.size());
+            // (A LiveGateway feeds `resting` into shadow_oms here.)
+        }
+    }
     double shadow_qmin_sum = 0.0;     // Σ est_qmin over reconciles (telemetry)
     uint64_t shadow_qmin_count = 0;
     double shadow_daily_pool_sum = 0.0;  // Σ daily pool over eligible markets seen
@@ -1015,14 +1062,61 @@ int main(int argc, char* argv[]) {
         return output.checks_performed;
     };
 
+    // Dead-man's-switch state (parser-thread local).
+    const uint64_t dms_threshold_ns = config.dead_mans_switch_seconds > 0
+        ? static_cast<uint64_t>(config.dead_mans_switch_seconds) * 1000000000ull : 0;
+    uint64_t last_msg_ns = now_ns();
+    bool dms_fired = false;
+    uint64_t dms_trips = 0;
+
     while (g_running || !receiver_done.load() || !message_queue->empty()) {
+        // Apply any reward-config refreshes (this thread is the sole writer of the
+        // Contract reward fields the executor reads below — no lock needed).
+        {
+            RewardConfigUpdate* ru = nullptr;
+            while (reward_update_queue->front(ru)) {
+                if (ru->contract_index < config.contracts.size()) {
+                    Contract& rc = config.contracts[ru->contract_index];
+                    const bool was = rc.reward_active;
+                    rc.reward_active = ru->active;
+                    rc.reward_max_spread_thou = ru->max_spread_thou;
+                    rc.reward_min_size = ru->min_size;
+                    rc.reward_daily_rate_usd = ru->daily_rate_usd;
+                    if (was != ru->active)
+                        std::fprintf(stderr, "[REWARDS] %s now %s\n", rc.asset_name.c_str(),
+                                     ru->active ? "ACTIVE" : "inactive (rates:null)");
+                }
+                reward_update_queue->pop();
+            }
+        }
+
         MessageSlot* slot = nullptr;
         if (!message_queue->front(slot)) {
             if (receiver_done.load()) {
                 break;
             }
+            // Dead-man's-switch: feed stale while running → flatten (cancel every
+            // resting order) + halt new ones. A disconnect leaves orders
+            // un-managed at the exchange (no data to react to) = unbounded adverse
+            // selection. Re-arms (resumes quoting) when data returns below.
+            if (dms_threshold_ns && g_running && config.shadow_executor_enabled &&
+                !dms_fired && (now_ns() - last_msg_ns) > dms_threshold_ns) {
+                shadow_oms.cancel_everything();
+                shadow_oms.set_kill_switch(true);
+                dms_fired = true;
+                ++dms_trips;
+                std::fprintf(stderr, "[DMS] feed stale >%ds — cancelled all, halted new orders\n",
+                             config.dead_mans_switch_seconds);
+            }
             cpu_relax();
             continue;
+        }
+
+        last_msg_ns = now_ns();
+        if (dms_fired) {                       // feed resumed → re-enable quoting
+            shadow_oms.set_kill_switch(false);
+            dms_fired = false;
+            std::fprintf(stderr, "[DMS] feed resumed — quoting re-enabled\n");
         }
 
         if (config.metrics_enabled) {
@@ -1480,6 +1574,9 @@ int main(int argc, char* argv[]) {
     if (sender_thread.joinable()) {
         sender_thread.join();
     }
+    if (reward_refresh_thread.joinable()) {
+        reward_refresh_thread.join();
+    }
     if (logger_thread.joinable()) {
         logger_thread.join();
     }
@@ -1504,6 +1601,10 @@ int main(int argc, char* argv[]) {
         if (config.quote_throttle_enabled) {
             std::printf("[THROTTLE] reconciles suppressed (queue-priority hold)=%" PRIu64 "\n",
                         throttle_skips);
+        }
+        if (config.dead_mans_switch_seconds > 0) {
+            std::printf("[DMS] dead-man's-switch trips (feed-stale flatten)=%" PRIu64
+                        " | armed at %ds stale\n", dms_trips, config.dead_mans_switch_seconds);
         }
         if (exec_mode == ExecMode::MockLive) {
             const live::MockLiveStats& ms = mock_exec.stats();

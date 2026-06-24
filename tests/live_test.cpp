@@ -184,6 +184,24 @@ int main() {
         CHECK(!i3.any(), "validate: clean quote has no issues");
     }
 
+    // ---- dead-man's-switch mechanism (runtime kill + flatten + resume) ----
+    {
+        ShadowGateway gw(false);
+        RiskLimits limits; limits.max_gross_notional_usd = 1e9; limits.max_position_shares = 1e9;
+        Oms oms(gw, limits);
+        DesiredQuotes q{}; q.bid = {490, 100, true}; q.ask = {510, 100, true};
+        oms.reconcile("T", q);
+        CHECK(oms.open_order_count() == 2, "dms: orders placed before trip");
+        oms.set_kill_switch(true);             // feed stale -> halt
+        oms.cancel_everything();               // ...and flatten
+        CHECK(oms.open_order_count() == 0, "dms: cancel_everything flattens");
+        oms.reconcile("T", q);                 // blocked while killed
+        CHECK(oms.open_order_count() == 0 && oms.kill_switch(), "dms: kill_switch blocks new orders");
+        oms.set_kill_switch(false);            // feed resumed
+        oms.reconcile("T", q);
+        CHECK(oms.open_order_count() == 2, "dms: re-enabled after the switch clears");
+    }
+
     std::printf("\n%s\n", g_failures == 0 ? "ALL PASS" : "FAILURES PRESENT");
     return g_failures == 0 ? 0 : 1;
 }

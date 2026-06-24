@@ -191,11 +191,12 @@ void Logger::consume_message(uint32_t bytes) {
     }
 }
 
-void Logger::consume_book(uint16_t count, bool has_latency_sample, float queue_us, float parse_us, float book_us,
-                          float arb_us, float e2e_us, uint16_t arb_checks) {
+void Logger::consume_latency_event(uint64_t& counter, uint16_t count, bool has_latency_sample,
+                                   float queue_us, float parse_us, float book_us,
+                                   float arb_us, float e2e_us, uint16_t arb_checks) {
     note_live_event();
     if (!benchmark_window_active()) return;
-    book_count_ += count;
+    counter += count;
     if (!metrics_enabled_) return;
     if (has_latency_sample) {
         lat_queue_.record(queue_us);
@@ -207,42 +208,24 @@ void Logger::consume_book(uint16_t count, bool has_latency_sample, float queue_u
         lat_e2e_.record(e2e_us);
         arb_checks_ += arb_checks;
     }
+}
+
+void Logger::consume_book(uint16_t count, bool has_latency_sample, float queue_us, float parse_us, float book_us,
+                          float arb_us, float e2e_us, uint16_t arb_checks) {
+    consume_latency_event(book_count_, count, has_latency_sample, queue_us, parse_us, book_us,
+                          arb_us, e2e_us, arb_checks);
 }
 
 void Logger::consume_price_change(uint16_t count, bool has_latency_sample, float queue_us, float parse_us, float book_us,
                                   float arb_us, float e2e_us, uint16_t arb_checks) {
-    note_live_event();
-    if (!benchmark_window_active()) return;
-    price_change_count_ += count;
-    if (!metrics_enabled_) return;
-    if (has_latency_sample) {
-        lat_queue_.record(queue_us);
-        lat_parse_.record(parse_us);
-        lat_book_.record(book_us);
-    }
-    if (has_latency_sample && arb_checks > 0) {
-        lat_arb_.record(arb_us);
-        lat_e2e_.record(e2e_us);
-        arb_checks_ += arb_checks;
-    }
+    consume_latency_event(price_change_count_, count, has_latency_sample, queue_us, parse_us, book_us,
+                          arb_us, e2e_us, arb_checks);
 }
 
 void Logger::consume_bbo(uint16_t count, bool has_latency_sample, float queue_us, float parse_us, float book_us,
                          float arb_us, float e2e_us, uint16_t arb_checks) {
-    note_live_event();
-    if (!benchmark_window_active()) return;
-    bbo_count_ += count;
-    if (!metrics_enabled_) return;
-    if (has_latency_sample) {
-        lat_queue_.record(queue_us);
-        lat_parse_.record(parse_us);
-        lat_book_.record(book_us);
-    }
-    if (has_latency_sample && arb_checks > 0) {
-        lat_arb_.record(arb_us);
-        lat_e2e_.record(e2e_us);
-        arb_checks_ += arb_checks;
-    }
+    consume_latency_event(bbo_count_, count, has_latency_sample, queue_us, parse_us, book_us,
+                          arb_us, e2e_us, arb_checks);
 }
 
 void Logger::consume_trade(uint16_t count) {

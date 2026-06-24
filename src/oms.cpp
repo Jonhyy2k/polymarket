@@ -1,16 +1,18 @@
 #include "oms.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
 
 bool ShadowGateway::submit(const ManagedOrder& order) {
     ++submitted_;
     if (verbose_) {
-        std::printf("[SHADOW-OMS] CREATE  cid=%llu %-4s %.3f x %u  %.40s\n",
+        std::printf("[SHADOW-OMS] CREATE  cid=%llu %-4s %.3f x %u  %.*s\n",
                     static_cast<unsigned long long>(order.client_id),
                     order_side_name(order.side),
                     static_cast<double>(order.price) / 1000.0, order.size,
-                    order.token_id.c_str());
+                    static_cast<int>(std::min<std::size_t>(40, order.token_id.size())),
+                    order.token_id.data());
     }
     return true;
 }
@@ -18,26 +20,32 @@ bool ShadowGateway::submit(const ManagedOrder& order) {
 bool ShadowGateway::cancel(const ManagedOrder& order) {
     ++canceled_;
     if (verbose_) {
-        std::printf("[SHADOW-OMS] CANCEL  cid=%llu %-4s %.3f x %u  %.40s\n",
+        std::printf("[SHADOW-OMS] CANCEL  cid=%llu %-4s %.3f x %u  %.*s\n",
                     static_cast<unsigned long long>(order.client_id),
                     order_side_name(order.side),
                     static_cast<double>(order.price) / 1000.0, order.size,
-                    order.token_id.c_str());
+                    static_cast<int>(std::min<std::size_t>(40, order.token_id.size())),
+                    order.token_id.data());
     }
     return true;
 }
 
-Oms::TokenBook& Oms::book_for(const std::string& token_id) {
-    for (auto& kv : books_) {
-        if (kv.first == token_id) return kv.second;
+Oms::TokenBook& Oms::book_for(std::string_view token_id) {
+    if (mru_idx_ < books_.size() && books_[mru_idx_].first == token_id)
+        return books_[mru_idx_].second;
+    for (size_t i = 0; i < books_.size(); ++i) {
+        if (books_[i].first == token_id) { mru_idx_ = i; return books_[i].second; }
     }
-    books_.emplace_back(token_id, TokenBook{});
+    books_.emplace_back(std::string(token_id), TokenBook{});
+    mru_idx_ = books_.size() - 1;
     return books_.back().second;
 }
 
-const Oms::TokenBook* Oms::find_book(const std::string& token_id) const {
-    for (const auto& kv : books_) {
-        if (kv.first == token_id) return &kv.second;
+const Oms::TokenBook* Oms::find_book(std::string_view token_id) const {
+    if (mru_idx_ < books_.size() && books_[mru_idx_].first == token_id)
+        return &books_[mru_idx_].second;
+    for (size_t i = 0; i < books_.size(); ++i) {
+        if (books_[i].first == token_id) { mru_idx_ = i; return &books_[i].second; }
     }
     return nullptr;
 }
@@ -51,12 +59,12 @@ size_t Oms::open_order_count() const {
     return n;
 }
 
-double Oms::net_position(const std::string& token_id) const {
+double Oms::net_position(std::string_view token_id) const {
     const TokenBook* tb = find_book(token_id);
     return tb ? tb->net_position : 0.0;
 }
 
-bool Oms::passes_risk(const std::string& token_id, const RewardQuote& q, OrderSide side) {
+bool Oms::passes_risk(std::string_view token_id, const RewardQuote& q, OrderSide side) {
     if (limits_.kill_switch) return false;
     if (open_order_count() >= limits_.max_open_orders_total) return false;
 
@@ -82,7 +90,7 @@ bool Oms::passes_risk(const std::string& token_id, const RewardQuote& q, OrderSi
     return true;
 }
 
-void Oms::place(TokenBook& tb, const std::string& token_id, const RewardQuote& q,
+void Oms::place(TokenBook& tb, std::string_view token_id, const RewardQuote& q,
                 OrderSide side, uint32_t mid2, bool neg_risk) {
     ManagedOrder o{};
     o.client_id = next_client_id_++;
@@ -111,7 +119,7 @@ void Oms::drop(ManagedOrder& order, bool& has_flag) {
     has_flag = false;
 }
 
-void Oms::reconcile(const std::string& token_id, const DesiredQuotes& desired,
+void Oms::reconcile(std::string_view token_id, const DesiredQuotes& desired,
                     uint32_t mid2, bool neg_risk) {
     TokenBook& tb = book_for(token_id);
 
@@ -144,7 +152,7 @@ void Oms::reconcile(const std::string& token_id, const DesiredQuotes& desired,
     }
 }
 
-LiveSide Oms::live_side(const std::string& token_id) const {
+LiveSide Oms::live_side(std::string_view token_id) const {
     LiveSide ls;
     const TokenBook* tb = find_book(token_id);
     if (!tb) return ls;
@@ -153,7 +161,7 @@ LiveSide Oms::live_side(const std::string& token_id) const {
     return ls;
 }
 
-void Oms::cancel_all(const std::string& token_id) {
+void Oms::cancel_all(std::string_view token_id) {
     TokenBook& tb = book_for(token_id);
     drop(tb.bid, tb.has_bid);
     drop(tb.ask, tb.has_ask);
@@ -166,7 +174,7 @@ void Oms::cancel_everything() {
     }
 }
 
-void Oms::apply_fill(const std::string& token_id, uint64_t client_id, Size fill_size) {
+void Oms::apply_fill(std::string_view token_id, uint64_t client_id, Size fill_size) {
     TokenBook& tb = book_for(token_id);
     ManagedOrder* o = nullptr;
     if (tb.has_bid && tb.bid.client_id == client_id) o = &tb.bid;

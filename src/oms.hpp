@@ -70,7 +70,10 @@ inline const char* order_state_name(OrderState s) noexcept {
 
 struct ManagedOrder {
     uint64_t    client_id = 0;       // our id; maps to exchange order id once acked
-    std::string token_id;            // ERC-1155 position token (v2 EIP-712 tokenId)
+    // View into process-stable token-id storage (the Contract's token_id_yes/no),
+    // not a copy — so copying a ManagedOrder through the SPSC command ring does
+    // NOT heap-allocate. Must point at storage that outlives the OMS.
+    std::string_view token_id;       // ERC-1155 position token (v2 EIP-712 tokenId)
     OrderSide   side = OrderSide::BUY;
     Price       price = 0;           // thousandths
     Size        size = 0;            // shares
@@ -113,6 +116,12 @@ public:
     // and it immediately drives the order to Live via the ack callback path).
     virtual bool submit(const ManagedOrder& order) = 0;
     virtual bool cancel(const ManagedOrder& order) = 0;
+    // LIVE plug-in seam: a LiveGateway overrides this to GET the account's open
+    // orders on startup and rebuild OMS state, so a restart/crash does not orphan
+    // resting orders at the exchange. Shadow/MockLive have no exchange state →
+    // default no-op. (When implemented live, token_ids must be interned into
+    // process-stable storage to satisfy ManagedOrder::token_id's view contract.)
+    virtual bool adopt_open_orders(std::vector<ManagedOrder>& /*out*/) { return false; }
 };
 
 // Shadow gateway: accepts every action, drives orders Live synchronously, and
@@ -135,7 +144,7 @@ private:
 // A command handed from the OMS (parser thread) to the cancel-sender thread via
 // an SPSC ring, so the hot path never blocks on the gateway's I/O. decided_ns is
 // stamped at enqueue to measure decision->execute (in-process send) latency.
-struct OrderCommand {
+struct alignas(64) OrderCommand {  // own cache line per ring slot (false sharing)
     enum class Kind : uint8_t { CREATE, CANCEL };
     Kind         kind = Kind::CREATE;
     ManagedOrder order;
@@ -187,21 +196,26 @@ public:
     // minimal set of cancel/create actions (cancel-then-create on any price/size
     // change). Idempotent: identical desired vs live => no action. mid2 (mid×2 of
     // the token's book) is stamped on placed orders for ACR drift detection.
-    void reconcile(const std::string& token_id, const DesiredQuotes& desired,
+    void reconcile(std::string_view token_id, const DesiredQuotes& desired,
                    uint32_t mid2 = 0, bool neg_risk = false);
 
     // Snapshot of our resting orders for a token (for the ACR engine).
-    LiveSide live_side(const std::string& token_id) const;
+    LiveSide live_side(std::string_view token_id) const;
 
     // Cancel every live order for a token (used on shutdown / resync / kill).
-    void cancel_all(const std::string& token_id);
+    void cancel_all(std::string_view token_id);
     void cancel_everything();
 
+    // Runtime kill toggle (dead-man's-switch / manual halt). When on, passes_risk
+    // blocks all NEW orders; existing orders are untouched (cancel separately).
+    void set_kill_switch(bool on) noexcept { limits_.kill_switch = on; }
+    bool kill_switch() const noexcept { return limits_.kill_switch; }
+
     // Apply a fill (from the shadow fill simulator or, live, the user WS).
-    void apply_fill(const std::string& token_id, uint64_t client_id, Size fill_size);
+    void apply_fill(std::string_view token_id, uint64_t client_id, Size fill_size);
 
     const OmsStats& stats() const noexcept { return stats_; }
-    double net_position(const std::string& token_id) const;
+    double net_position(std::string_view token_id) const;
     size_t open_order_count() const;
 
 private:
@@ -213,8 +227,8 @@ private:
         double net_position = 0.0;  // +long shares (BUY filled) - short (SELL filled)
     };
 
-    bool passes_risk(const std::string& token_id, const RewardQuote& q, OrderSide side);
-    void place(TokenBook& tb, const std::string& token_id, const RewardQuote& q,
+    bool passes_risk(std::string_view token_id, const RewardQuote& q, OrderSide side);
+    void place(TokenBook& tb, std::string_view token_id, const RewardQuote& q,
                OrderSide side, uint32_t mid2, bool neg_risk);
     void drop(ManagedOrder& order, bool& has_flag);
 
@@ -223,7 +237,12 @@ private:
     OmsStats      stats_{};
     uint64_t      next_client_id_ = 1;
     std::vector<std::pair<std::string, TokenBook>> books_;  // small N (markets)
+    // 1-entry most-recently-used index cache: the executor looks up the same
+    // token 3x in a row (live_side, net_position, reconcile), so this turns the
+    // O(N) string scan into one compare on the 2nd/3rd hit. Index (not pointer)
+    // so it survives a books_ realloc; re-validated by string compare each use.
+    mutable size_t mru_idx_ = SIZE_MAX;
 
-    TokenBook& book_for(const std::string& token_id);
-    const TokenBook* find_book(const std::string& token_id) const;
+    TokenBook& book_for(std::string_view token_id);
+    const TokenBook* find_book(std::string_view token_id) const;
 };

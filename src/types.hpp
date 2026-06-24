@@ -259,6 +259,13 @@ struct Config {
     bool        quote_telemetry_enabled = false;
     std::string quote_telemetry_log_file = "logs/quote_telemetry.csv";
     size_t      quote_telemetry_queue_capacity = 8192;
+    // Live-safety: feed stale > this => cancel every resting order + halt new ones
+    // (dead-man's-switch); re-arms when data returns. 0 = disabled.
+    int         dead_mans_switch_seconds = 0;
+    // Markets rotate (rates:null) mid-session; re-fetch reward config every N s and
+    // apply via a single-writer (parser) update ring. 0 = fetch once at startup.
+    int         reward_refresh_seconds = 0;
+    size_t      reward_update_queue_capacity = 64;
     // ACR (anti-cancel-race): fast defensive cancels + skew/vol quoting.
     bool        acr_enabled = true;
     int         acr_stale_drift_ticks = 1;        // cancel when mid drifts this many ticks against a quote

@@ -470,6 +470,8 @@ JSON (see `config.strategy.json`). Selected keys:
 | **`quote_throttle_enabled`** / **`_min_ms`** / **`_max_ms`** / **`_vol_hot_thou`** | adaptive throttle on/off, cadence bounds, volatility threshold |
 | **`quote_telemetry_enabled`** / **`_log_file`** / **`_queue_capacity`** | per-reconcile telemetry capture → CSV |
 | **`near_miss_live_log_file`** | mocklive off-grid/too-wide/crossed audit CSV |
+| **`dead_mans_switch_seconds`** | feed stale > this ⇒ cancel-all + halt new orders (0 = off) |
+| **`reward_refresh_seconds`** | re-fetch reward config every N s (markets rotate `rates:null`; 0 = startup-only) |
 | **`ws_tls13_enabled`** / **`ws_permessage_deflate`** | transport A/B (TLS 1.3 negotiate; WS compression) |
 
 Example configs in the repo: `config.live.json` (crypto scanner),
@@ -605,6 +607,50 @@ Until then: scanner is read-only; maker is shadow/mocklive-only (no key, no send
 
 ---
 
+## Known limitations & improvement backlog
+
+A candid map of what's solid, what's been addressed, and what's still open — by
+category. **✅ done in-repo · ⚠️ open · 🔒 gated on compliance.**
+
+**Strategy**
+- ⚠️ **Adverse selection is unmeasured → net P&L unproven.** The single biggest
+  unknown. The telemetry capture (`quote_telemetry.csv`) is built — run it for
+  hours/days and fold into `fill_sim.py`. This is the go/no-go for the true-LP shift.
+- ⚠️ Capacity-bound / competition-compressed — a small-capital niche, not scalable.
+- ⚠️ ACR is **defensive-only** from Ireland (~10 ms) — don't build on winning the
+  cancel-race; *smarts* (toxicity-aware cancels, optimal defensive spread) beat speed.
+
+**Architecture / live-safety**
+- ✅ **Dead-man's-switch** — feed-stale → cancel-all + halt new orders; resumes on
+  data return (`dead_mans_switch_seconds`). Closes the "orphaned orders on disconnect"
+  gap.
+- ✅ **Runtime kill switch** (`Oms::set_kill_switch`) — manual/automatic halt.
+- ✅ **Startup reconciliation seam** (`IExecGateway::adopt_open_orders`) — the live
+  plug-in point so a restart/crash doesn't orphan resting orders (no-op in shadow/mock).
+- ✅ **Reward-config refresh** — markets going `rates:null` mid-session are now picked
+  up (`reward_refresh_seconds`, applied via a single-writer SPSC ring, no hot-path lock).
+
+**Spec**
+- ⚠️ **v2 EIP-712 UNVERIFIED on-chain** — run `python3 tools/verify_eip712.py --rpc
+  <your Polygon RPC>` to reconcile `ORDER_TYPEHASH` + domain separators against the
+  deployed Exchange and resolve the neg-risk domain `name` (A vs B). The offline
+  cross-check (independent Python keccak vs the C++/OpenSSL path) already matches.
+- ⚠️ v2 fee formula unvalidated (captured `fee_rate_bps` were 0).
+
+**Latency / infra**
+- ✅ Audit cleanups: logger DRY, keccak caching (≈2.96→1.96 µs/digest), token_id
+  `string_view` (no ring-copy alloc), OMS MRU lookup, message-ring 128→32 MB, dead
+  buffer removed, cache-aligned ring slots. Sender p99 155→49 µs.
+- ⚠️ Host µs-stack (kernel bypass, isolcpus, ENA) — **only material once colocated**;
+  see the runbook above.
+
+**Compliance**
+- 🔒 Jurisdiction/KYB gate blocks live (gate #1). Running infra in London (eu-west-2)
+  to gain cancel latency is **operating from a restricted region** — the sanctioned
+  way to be in London is the **KYB colocation**, not a split-instance workaround.
+
+---
+
 ## Roadmap
 
 1. **Run the quote-telemetry capture for hours/days** (now built —
@@ -627,12 +673,28 @@ Until then: scanner is read-only; maker is shadow/mocklive-only (no key, no send
    groups) — **only material if you colocate**; noise vs the ms network while
    remote. Defer until colocated and only if profiling says host time matters.
 
-### Runbook — pinning the sender (once on a low-latency box)
-At boot: `isolcpus=3 nohz_full=3 rcu_nocbs=3` (reserve a full **physical** core, not
-a hyperthread sibling of the parser). In config: `"sender_cpu": 3, "sender_priority":
-80`. The binary applies CPU affinity + SCHED_FIFO via `apply_thread_runtime_tuning`.
-This is a p99-jitter (tail) play, not a median one — the network ms still dominates
-until you colocate.
+### Runbook — host tuning (ONLY once colocated; noise while remote)
+All of this is **p99-jitter (tail) polish that saves microseconds** — it is *noise*
+against the ms network until you colocate, so do it last. Sourced from the canonical
+[rigtorp low-latency guide](https://rigtorp.se/low-latency-guide/) + the
+[AWS tick-to-trade](https://aws.amazon.com/blogs/web3/optimize-tick-to-trade-latency-for-digital-assets-exchanges-and-trading-platforms-on-aws/) posts.
+
+- **Core isolation** (boot): `isolcpus=2,4,6 nohz_full=2,4,6 rcu_nocbs=2,4,6` — reserve
+  **full physical cores** (not HT siblings of each other) for receiver/parser/sender.
+- **Config**: `"sender_cpu": 6, "sender_priority": 80`, plus `receiver_cpu`/`parser_cpu`,
+  `lock_memory: true` (mlockall), `prefault_stack_kb`. The binary applies affinity +
+  SCHED_FIFO via `apply_thread_runtime_tuning`.
+- **Disable SMT/hyperthreading**: `nosmt` (or `echo off > /sys/devices/system/cpu/smt/control`).
+- **Frequency**: performance governor + turbo on; **disable deep C-states** (`intel_idle.max_cstate=1`).
+- **Memory**: `transparent_hugepage=never`, `swapoff -a`, optional explicit huge pages;
+  the binary already `mlock`s + prefaults when `lock_memory:true`.
+- **IRQ affinity**: steer NIC/timer IRQs off the isolated cores (`IRQBALANCE_BANNED_CPUS`).
+- **Already in the code**: `TCP_NODELAY` (set), simdjson parser reuse, lock-free SPSC with
+  cache-line-aligned indices+slots, allocation-free hot path. **Don't** enable
+  `permessage-deflate` for steady-state (it costs more than it saves on ~600 B frames).
+- **Kernel bypass (DPDK/OpenOnload)** and **busy-poll**: ~20–50 µs → ~1–5 µs on the host
+  send path — only worth it *colocated*, and only if profiling says host time matters
+  there. Skip while remote.
 
 ---
 

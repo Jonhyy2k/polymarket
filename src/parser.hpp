@@ -195,30 +195,12 @@ struct ParsedBestBidAskEvent {
 
 class MessageParser {
 public:
-    static constexpr size_t kBufferCapacity = 1024 * 1024;
-
-    MessageParser();
-
-    template <typename BookCallback, typename TradeCallback,
-              typename PriceChangeCallback, typename BestBidAskCallback,
-              typename TickSizeCallback>
-    void parse(const char* data, size_t len, NanoTime /* t0_recv */,
-               BookCallback&& on_book, TradeCallback&& on_trade,
-               PriceChangeCallback&& on_price_change,
-               BestBidAskCallback&& on_best_bid_ask,
-               TickSizeCallback&& on_tick_size) {
-        if (len == 0 || len > kBufferCapacity) return;
-
-        std::memcpy(padded_buf_, data, len);
-        std::memset(padded_buf_ + len, 0, simdjson::SIMDJSON_PADDING);
-
-        parse_padded(padded_buf_, len, kBufferCapacity + simdjson::SIMDJSON_PADDING,
-                     std::forward<BookCallback>(on_book),
-                     std::forward<TradeCallback>(on_trade),
-                     std::forward<PriceChangeCallback>(on_price_change),
-                     std::forward<BestBidAskCallback>(on_best_bid_ask),
-                     std::forward<TickSizeCallback>(on_tick_size));
-    }
+    // Frames are parsed in place out of the SPSC ring slot (see parse_padded);
+    // 256 KiB comfortably covers the largest observed frame (~48 KiB initial
+    // dump, ~5x margin) — oversize frames are dropped + counted, never silently
+    // truncated. Sized down from 1 MiB to shrink the message-ring footprint
+    // (capacity x slot): 128 x ~256 KiB ≈ 32 MiB instead of ~128 MiB.
+    static constexpr size_t kBufferCapacity = 256 * 1024;
 
     template <typename BookCallback, typename TradeCallback,
               typename PriceChangeCallback, typename BestBidAskCallback,
@@ -363,5 +345,4 @@ private:
     }
 
     simdjson::ondemand::parser parser_;
-    alignas(64) char padded_buf_[kBufferCapacity + simdjson::SIMDJSON_PADDING];
 };

@@ -92,12 +92,14 @@ inline eip712::OrderWords encode(const LiveOrderPayload& p) {
     return w;
 }
 
-// Full EIP-712 digest for this order under the correct v2 domain.
+// Full EIP-712 digest for this order under the correct v2 domain. Uses the cached
+// domain separator (constant), so a digest costs just 2 keccaks: hash_struct +
+// the 0x1901 wrap.
 inline eip712::Bytes32 digest(const LiveOrderPayload& p) {
-    const eip712::Domain dom =
-        p.neg_risk ? eip712::polymarket_v2::neg_risk() : eip712::polymarket_v2::standard();
-    return eip712::typed_data_hash(eip712::domain_separator(dom),
-                                   eip712::hash_struct(encode(p)));
+    const eip712::Bytes32& dom_sep =
+        p.neg_risk ? eip712::polymarket_v2::neg_risk_separator()
+                   : eip712::polymarket_v2::standard_separator();
+    return eip712::typed_data_hash(dom_sep, eip712::hash_struct(encode(p)));
 }
 
 // ── Pre-send quote validation (feeds near_miss_live.log) ────────────────────

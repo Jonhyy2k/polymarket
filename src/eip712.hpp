@@ -39,19 +39,30 @@ inline const EVP_MD* keccak_md() noexcept {
     return md;
 }
 
+// Reused per-thread digest context — EVP_DigestInit_ex re-initializes it each
+// call, so we avoid an EVP_MD_CTX_new/free (malloc/free) on every keccak. Freed
+// on thread exit. Off the hot path, but a digest is several keccaks, so reuse
+// keeps the sender-thread hand-off tight.
+inline EVP_MD_CTX* keccak_ctx() noexcept {
+    struct CtxHolder {
+        EVP_MD_CTX* ctx = EVP_MD_CTX_new();
+        ~CtxHolder() { if (ctx) EVP_MD_CTX_free(ctx); }
+    };
+    static thread_local CtxHolder holder;
+    return holder.ctx;
+}
+
 inline Bytes32 keccak256(const uint8_t* data, size_t len) noexcept {
     Bytes32 out{};
     const EVP_MD* md = keccak_md();
-    if (!md) return out;  // self_test() catches a missing provider loudly
-    EVP_MD_CTX* ctx = EVP_MD_CTX_new();
-    if (!ctx) return out;
+    EVP_MD_CTX* ctx = keccak_ctx();
+    if (!md || !ctx) return out;  // self_test() catches a missing provider loudly
     unsigned int n = 0;
     if (EVP_DigestInit_ex(ctx, md, nullptr) != 1 ||
         EVP_DigestUpdate(ctx, data, len) != 1 ||
         EVP_DigestFinal_ex(ctx, out.data(), &n) != 1) {
         out.fill(0);
     }
-    EVP_MD_CTX_free(ctx);
     return out;
 }
 
@@ -170,6 +181,20 @@ inline Bytes32 domain_separator(const Domain& d) {
     const Bytes32 vc = word_hex(d.verifying_contract); std::memcpy(buf + 128, vc.data(), 32);
     return keccak256(buf, sizeof(buf));
 }
+
+namespace polymarket_v2 {
+    // The two v2 domains are constant, so their separators are computed once and
+    // cached. Per-order digests should use these instead of recomputing
+    // keccak(name)/keccak(version)/keccak(domain) every time (~3 keccaks saved).
+    inline const Bytes32& standard_separator() {
+        static const Bytes32 s = domain_separator(standard());
+        return s;
+    }
+    inline const Bytes32& neg_risk_separator() {
+        static const Bytes32 s = domain_separator(neg_risk());
+        return s;
+    }
+}  // namespace polymarket_v2
 
 // Fully-encoded order fields (already in ABI-word form), in struct order.
 struct OrderWords {
