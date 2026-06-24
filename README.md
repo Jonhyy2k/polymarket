@@ -464,6 +464,7 @@ JSON (see `config.strategy.json`). Selected keys:
 | **`acr_vol_widen_k`** | widen each side by `k × mid-vol EWMA` |
 | **`command_queue_capacity`** | OMS → cancel-sender ring size |
 | **`sender_cpu`** / **`sender_priority`** | cancel-sender pinning (−1 = unpinned) / SCHED_FIFO priority |
+| **`sender_park_after_idle_us`** | 0 = sender busy-polls (lowest latency); >0 = park-when-idle (frees the core) |
 | **`exec_mode`** | `shadow` (log), `mocklive` (build v2 order + EIP-712 digest, no key/send), `live` (gated) |
 | **`live_maker_address`** / **`live_signer_address`** / **`live_signature_type`** | (mock) signer identity; placeholders until custody |
 | **`risk_pusd_allowance_usd`** | simulated pUSD allowance cap (0 = unlimited) |
@@ -489,6 +490,8 @@ Example configs in the repo: `config.live.json` (crypto scanner),
 | `tools/ws_schema_dump.py` | capture raw v2 WS frames → `ws_raw_frames.jsonl` |
 | `tools/fill_sim.py` | shadow fill simulator + net-PnL estimate (reward markets) |
 | `tools/hedge_arb_test.py` | live paper test for buy/sell-both free-arb (proves no taker free lunch) |
+| `tools/verify_eip712.py` | reconcile the v2 EIP-712 typehash/domain on-chain (resolve the neg-risk name) |
+| `tools/profile_run.py` | 5-min `/proc` sampler (mem, per-core CPU, ctxt-switches, net) → `analysis/profile_plots.py` |
 
 All gamma/CLOB calls need a `User-Agent` header (else 403).
 To build a rewards config, select reward-active markets from
@@ -695,6 +698,30 @@ against the ms network until you colocate, so do it last. Sourced from the canon
 - **Kernel bypass (DPDK/OpenOnload)** and **busy-poll**: ~20–50 µs → ~1–5 µs on the host
   send path — only worth it *colocated*, and only if profiling says host time matters
   there. Skip while remote.
+
+`deploy/tune_low_latency.sh --cores 2,4,6 [--apply-grub]` applies all of the above
+(governor, C-states, THP, IRQ steering, sysctls, rt/mlock limits, and the GRUB
+isolcpus/nohz_full line).
+
+### Profiling (measured, 2026-06) — what the host actually does
+
+A 5-min live capture (`tools/profile_run.py` → `analysis/profile_plots.py`; 5,576
+frames + 1,495 system samples) on the dev box:
+
+- **In-process is excellent:** e2e **p50 3.0 µs** (queue 1.1 + parse 1.8 + book
+  **0.02**), **no memory leak** (RSS flat ~51 MB), book-update near-free (bitmap).
+- **The whole tail is preemption, not code:** e2e p99.9 **57 µs** / max 388 µs — the
+  worst *steady-state* frames are small 620-byte frames that took 30–100 µs **in
+  parse**, coinciding with **9.1/s involuntary context switches** (the OS preempting
+  the busy-poll threads on **un-isolated** cores; voluntary switches = 0). So
+  `isolcpus`+`nohz_full` is the *measured* fix — it removes the preemptions that
+  literally are the p99.9 tail. simdjson isn't the bottleneck; the scheduler is.
+- **Busy-poll burns ~2 cores** (parser core 4 + sender, both ~100%) by design. The
+  sender spins a full core for ~12 events in 5 min — on a small/shared box set
+  **`sender_park_after_idle_us`** >0 to park it when idle (0 = pure spin on a
+  dedicated isolated core).
+
+Re-run any time: `python3 tools/profile_run.py --duration 300 && python3 analysis/profile_plots.py`.
 
 ---
 

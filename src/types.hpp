@@ -274,6 +274,12 @@ struct Config {
     size_t      command_queue_capacity = 1024;    // OMS -> sender-thread ring
     int         sender_cpu = -1;                  // cancel-sender thread pinning
     int         sender_priority = 0;              // cancel-sender RT priority (SCHED_FIFO)
+    // Sender idle behavior. 0 = pure busy-poll (lowest latency; pegs a core — the
+    // profile showed it spins a full core for ~12 events in 5 min). >0 = spin-then-
+    // park: busy-poll briefly after activity, then sleep this many µs once idle,
+    // freeing the core. Cancels are rare and latency-tolerant vs the ms network, so
+    // use >0 on small/shared boxes; keep 0 on a dedicated isolated core.
+    uint32_t    sender_park_after_idle_us = 0;
     // WebSocket transport A/B knobs (network-bound; measure, don't assume).
     bool        ws_tls13_enabled = true;          // generic TLS context (negotiates up to 1.3)
     bool        ws_permessage_deflate = false;    // negotiate WS compression (helps bootstrap burst)

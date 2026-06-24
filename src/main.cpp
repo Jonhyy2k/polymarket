@@ -182,6 +182,8 @@ Config load_config(const std::string& path) {
         config.sender_cpu = (int)iv;
     if (!doc["sender_priority"].get_int64().get(iv))
         config.sender_priority = (int)iv;
+    if (!doc["sender_park_after_idle_us"].get_int64().get(iv) && iv >= 0)
+        config.sender_park_after_idle_us = (uint32_t)iv;
     // Execution mode + (mock) live signer identity.
     if (!doc["exec_mode"].get_string().get(sv))
         config.exec_mode = std::string(sv);
@@ -916,6 +918,11 @@ int main(int argc, char* argv[]) {
             config.sender_priority > 0 ? config.sender_priority : config.realtime_priority,
             config.prefault_stack_kb);
         IExecGateway& exec = *exec_ptr;
+        // Idle policy: spin hot, but if sender_park_after_idle_us>0, park (sleep)
+        // once we've spun a short window with no work — frees the core when truly
+        // idle (cancels are rare). Stays hot right after activity (covers bursts).
+        const uint32_t park_us = config.sender_park_after_idle_us;
+        uint64_t idle_spins = 0;
         while (!sender_stop.load(std::memory_order_acquire) || !command_queue->empty()) {
             OrderCommand* cmd = nullptr;
             if (command_queue->front(cmd)) {
@@ -926,6 +933,9 @@ int main(int argc, char* argv[]) {
                     sender_send_us.record(static_cast<double>(t_exec - cmd->decided_ns) / 1000.0);
                 }
                 command_queue->pop();
+                idle_spins = 0;
+            } else if (park_us > 0 && ++idle_spins > 1024) {
+                std::this_thread::sleep_for(std::chrono::microseconds(park_us));
             } else {
                 cpu_relax();
             }
