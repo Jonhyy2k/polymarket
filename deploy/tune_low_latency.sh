@@ -7,10 +7,12 @@
 # so core isolation below is the highest-value lever (and only matters once you're
 # latency-competitive, i.e. colocated/Ireland; it's still µs vs the ms network).
 #
-#   sudo deploy/tune_low_latency.sh --cores 2,4,6 [--apply-grub] [--mitigations-off]
+#   sudo deploy/tune_low_latency.sh --cores 2,3,4,5 [--nosmt] [--apply-grub] [--mitigations-off]
 #
 #   --cores C        CPUs to isolate for receiver/parser/sender(+logger). Reserve
 #                    FULL physical cores (not hyperthread siblings of each other).
+#   --nosmt          disable hyperthreading -> clean physical cores, no sibling
+#                    L1/L2 contention (recommended when you have cores to spare).
 #   --apply-grub     rewrite GRUB cmdline + update-grub (NEEDS REBOOT). Without it,
 #                    the recommended GRUB line is printed for you to apply.
 #   --mitigations-off  also add mitigations=off (faster, but a security trade-off).
@@ -18,9 +20,10 @@
 # Runtime settings (governor, THP, IRQ affinity, sysctls, swap, KSM) apply now.
 set -euo pipefail
 
-CORES="2,4,6"; APPLY_GRUB=0; MIT_OFF=0
+CORES="2,4,6"; APPLY_GRUB=0; MIT_OFF=0; NOSMT=0
 while [ $# -gt 0 ]; do case "$1" in
   --cores) CORES="$2"; shift 2;;
+  --nosmt) NOSMT=1; shift;;
   --apply-grub) APPLY_GRUB=1; shift;;
   --mitigations-off) MIT_OFF=1; shift;;
   *) echo "unknown arg: $1"; exit 1;;
@@ -65,7 +68,9 @@ LIM
 
 GRUB_ADD="isolcpus=${CORES} nohz_full=${CORES} rcu_nocbs=${CORES} intel_idle.max_cstate=1 processor.max_cstate=1 transparent_hugepage=never"
 [ "$MIT_OFF" -eq 1 ] && GRUB_ADD="$GRUB_ADD mitigations=off"
-# nosmt is optional: doubles per-thread L1/L2 but halves cores. Decide per box.
+# nosmt disables hyperthreading -> clean physical cores (no sibling L1/L2 contention
+# on the hot parser core); halves logical CPU count. Recommended with cores to spare.
+[ "$NOSMT" -eq 1 ] && GRUB_ADD="$GRUB_ADD nosmt"
 
 if [ "$APPLY_GRUB" -eq 1 ]; then
   echo ">> [grub] applying boot params (REBOOT REQUIRED)"
