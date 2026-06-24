@@ -56,8 +56,13 @@ A low-latency C++ system for Polymarket's CLOB **v2** that does two things:
 | Shadow fill simulator + net estimate | ✅ built & validated |
 | **ACR engine** (at-risk detect, skew, vol-width) | ✅ shadow, unit-tested |
 | **Threaded cancel-sender** (SPSC ring, pinned) | ✅ built, sub-µs hand-off |
+| **MockLive gateway** (v2 order + EIP-712 digest, keyless) | ✅ built, 12 digests on live data, unit-tested |
+| **Adaptive quote throttle** (ACR-aware) | ✅ built, unit-tested |
+| **Quote telemetry capture** (adverse-selection groundwork) | ✅ built (CSV on logger thread) |
+| **pUSD allowance sim** (pre-trade gate) | ✅ built, unit-tested |
+| v2 EIP-712 spec | ⚠️ verified-from-docs, **UNVERIFIED on-chain** (1 open field) |
 | **Live execution (signing/auth/allowances)** | ❌ **not built — gated** |
-| Fill-probability model (trustworthy net) | ❌ needs long capture / live data |
+| Fill-probability model (trustworthy net) | ❌ needs the telemetry capture above over hours/days |
 
 Latency (laptop, in-process `t0→t3`): parse p50 ~1.2µs, book p50 ~0.3µs, arb
 p50 ~0.6µs, e2e p50 ~3.5µs; OMS→sender hand-off p50 0.36µs / p99 2.2µs.
@@ -101,7 +106,8 @@ python3 tools/build_live_config.py config.live.json 16
 
 ### Tests
 ```bash
-./build/test_executor   # 39 deterministic checks: scoring, Qmin, quoting, OMS, risk, fills, ACR
+./build/test_executor   # 35 deterministic checks: scoring, Qmin, quoting, OMS, risk, fills, ACR
+./build/live_test       # 29 deterministic checks: Keccak/EIP-712, v2 mapping, MockLive, throttle, allowance
 ```
 
 ---
@@ -197,13 +203,25 @@ single-digit µs; the network is tens of milliseconds, ~4 orders larger.
 clock-*independent* warm round-trip from Lisbon to the CLOB origin = **47.6 ms**
 (≈ London 35 ms RTT + ~12 ms server processing; us-east-1 measures 125 ms and is
 ruled out), corroborated by public infra write-ups. Settlement is on Polygon via
-the CTF Exchange contract; the API is **Cloudflare-fronted** (everyone hits a CF
-edge — no raw sub-Cloudflare access for anyone).
+the CTF Exchange contract; the **public** CLOB API (REST + market WS) is
+**Cloudflare-fronted** — you connect to the nearest CF edge (check the `cf-ray`
+response header for the PoP code, e.g. `-AMS`/`-LHR`), and CF relays to the London
+origin. So RTT ≈ [you → CF edge] + [CF edge → London origin → back]: the first leg
+you control by location, the second is shared.
 
-> ⚠️ **Correction:** earlier notes in this repo's history said "us-east". That came
-> from the one-way `Feed deliv (ms)` floor (~44 ms), which was inflated by ~25 ms of
-> **laptop NTP clock skew**. The clock-independent round-trip (immune to skew) is the
-> reliable measure and says **London**. Trust round-trip, not skewed one-way.
+> ✅ **Correction (2026-06, supersedes the earlier "no raw sub-Cloudflare access for
+> anyone"):** Polymarket's CLOB docs confirm **direct colocation in `eu-west-2` is
+> available** to anyone who completes their **KYC/KYB form** — a *direct, sub-
+> Cloudflare* line to the engine, "the lowest feasible latency to Polymarket's
+> primary servers." That is how the fastest players reach sub-ms: they **colocate**,
+> they don't fight the Cloudflare path from afar. It is the *sanctioned institutional*
+> route (in the geo-restricted region, behind KYB), so it sits **downstream of
+> compliance gate #1**, not around it.
+
+> ⚠️ **Earlier correction (kept for the record):** notes in this repo's history said
+> "us-east". That came from the one-way `Feed deliv (ms)` floor (~44 ms), inflated by
+> ~25 ms of **laptop NTP clock skew**. The clock-independent round-trip says
+> **London**. Trust round-trip, not skewed one-way.
 
 **Maker lifecycle latency, from the Lisbon laptop (measured RTT):**
 
@@ -216,16 +234,28 @@ edge — no raw sub-Cloudflare access for anyone).
 
 In-process work (~5 µs host total) is buried inside each row — it rounds to zero.
 
-**Deployment:** the engine is in London but **London (eu-west-2) is geo-banned to
-run from**, so the fastest *compliant* spot is **Ireland (eu-west-1, ~10–12 ms
-RTT)** — or Amsterdam/Frankfurt (~10–15 ms). Ireland cuts tick-to-react ~35 ms →
-~10 ms, which is what turns ACR from "always picked off" into "competitive". Run
-the same binary per region to A/B; run **chrony** and trust the round-trip number.
+**Deployment (non-colocated):** the engine is in London (eu-west-2, geo-restricted
+to run from). Polymarket's docs designate **`eu-west-1` (Ireland) as the closest
+*unrestricted* region** — and because the engine is in AWS, an instance in AWS
+eu-west-1 can ride AWS's dedicated **inter-region backbone** to eu-west-2, which
+plausibly beats a geographically-closer **Amsterdam** that crosses public internet +
+Cloudflare (community reports claim Dublin 0–1 ms to the backend; unverified VPS
+marketing). This **revises an earlier steer toward Amsterdam**: Amsterdam's logic
+holds for the public CF endpoint, but for an AWS deploy Ireland is the intended path
+and likely wins. **Measure before committing** — A/B candidate regions on the
+`cf-ray` PoP + warm **TCP-connect RTT** (not the skew-prone one-way feed number),
+run **chrony/PTP**, trust round-trip.
 
-**Implication:** latency *is* winnable from Europe (it was never transatlantic).
-Kernel bypass / io_uring / busy-poll save *microseconds* on the host send path —
-noise against the ms network. The decisive lever is **location** (Lisbon → Ireland),
-not host micro-optimization.
+**Implication:** the decisive lever is **location** (Lisbon → Ireland, or colo in
+eu-west-2), not host micro-optimization. Kernel bypass / io_uring / busy-poll / NIC
+tuning save *microseconds* on the host path — noise against the ms network **while
+remote**. The AWS "tick-to-trade" stack (cluster placement groups, ENA, DPDK/XDP,
+bare-metal — see AWS Web3 blog Pts 1–2) optimizes traffic *between your own EC2
+instances* and **only becomes material once you colocate**, when the network shrinks
+to ms/µs and host time finally dominates. It is a **package with colocation**, not a
+remote-client win. For a **rewards-LP** (earns by *standing* in the book, not racing)
+colocation + that µs-stack is likely **overkill** — the cancel-race isn't where the
+money is; the unmeasured **adverse-selection** number is.
 
 ---
 
@@ -296,8 +326,82 @@ Measured in-process hand-off (OMS decide → sender send): **p50 0.36 µs / p99
   default) the base reconcile re-centers before drift builds, so at-risk rarely
   fires — the unit tests prove detection works on real moves.
 
-39 deterministic checks in `test_executor` cover scoring/Qmin/quoting/OMS/risk/
-fills + ACR (vol EWMA, at-risk cross & drift, skew, vol-widen).
+35 deterministic checks in `test_executor` cover scoring/Qmin/quoting/OMS/risk/
+fills + ACR (vol EWMA, at-risk cross & drift, skew, vol-widen). A second binary
+`live_test` adds 29 checks for the (mock) live path (Keccak/EIP-712, v2 mapping,
+MockLiveGateway, throttle, allowance) — see below.
+
+---
+
+## Execution modes (Shadow / MockLive / Live)
+
+The OMS, reconcile, risk gate, ACR, inventory and throttle are all **mode-agnostic**
+— they only ever see an `IExecGateway`. `exec_mode` selects which gateway the
+cancel-sender thread uses; nothing upstream changes. This is the clean seam to
+the live path.
+
+| mode | what the send side does | keys? | network? |
+|---|---|---|---|
+| `shadow` (default) | logs the intended create/cancel | no | no |
+| `mocklive` | **builds the real v2 order + computes the full EIP-712 digest**, counts it, audits the quote — then stops | **no** | no |
+| `live` | real signer + CLOB POST — **not built, gated**; falls back to shadow with a warning | (gated) | (gated) |
+
+**MockLive** is the middle rung that de-risks going live without custody. On every
+create it maps the resting quote → the v2 `Order` struct → the 32-byte EIP-712
+typed-data hash an EOA *would* sign, exercising the whole serialize/hash path so
+the format is validated and the cost measured. It never signs and never sends.
+A live 35 s run computed **12 EIP-712 digests on real reward-market orders** with
+zero off-grid/too-wide near-misses.
+
+### v2 signing spec (verified-from-docs, **UNVERIFIED on-chain**)
+
+Captured 2026-06 from the Polymarket v2 migration docs + community references.
+`src/eip712.hpp` computes **real** Keccak-256 EIP-712 digests from these — but they
+are **not yet reconciled against the deployed contract**, so a digest is for path
+validation only, **never** a live signature, until checked. `MockLiveGateway::describe()`
+prints the derived `ORDER_TYPEHASH` + domain separators at startup for exactly that
+reconciliation.
+
+| field | value | confidence |
+|---|---|---|
+| Order struct | `salt, maker, signer, tokenId, makerAmount, takerAmount, side(u8), signatureType(u8), timestamp, metadata(b32), builder(b32)` | high (3 sources) |
+| `ORDER_TYPEHASH` (derived) | `0xbb86318a…33818589` | computed |
+| domain name / version / chainId | `Polymarket CTF Exchange` / `"2"` / `137` | high |
+| Exchange (standard) | `0xE111180000d2663C0091e4f400237545B87B996B` | high |
+| Exchange (neg-risk) | `0xe2222d279d744050d28e00520010520000310F59` | high |
+| **neg-risk domain `name`** | defaulted to `Polymarket CTF Exchange` | ⚠️ **open** — migration doc says this, a cheatsheet says `Polymarket Neg Risk CTF Exchange`; flip `kNegRiskName` if chain says so |
+| signatureType | `0 EOA, 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE` | high |
+| collateral | pUSD, 6 dp (allowance-sim only; not in the hash) | med |
+
+v1→v2 dropped `taker/expiration/nonce/feeRateBps` and added `timestamp/metadata/builder`,
+and bumped the domain version `"1"→"2"`. Building the v1 struct from memory would
+have hashed the wrong order — hence the doc-verification gate.
+
+### Adaptive quote throttle
+
+Re-quoting every tick is fine in shadow but live it shreds queue priority and burns
+rate limits. `src/throttle.hpp` holds the resting quote between moves and only acts
+when it must — **ACR at-risk, or a side being added/removed, always bypass**. Cadence
+adapts: **calm → lengthen** (keep your queue spot), **volatile → shorten** (re-center
+fast). This is the corrected logic (calm slows, volatile speeds — the inverse of the
+common first sketch), and it's what makes ACR matter (ACR's urgent cancel is only
+meaningful once re-quoting is throttled). In the live run the throttle held **1120**
+reconciles against 12 acted-on changes.
+
+### pUSD allowance + telemetry
+
+- **Allowance sim** (`risk_pusd_allowance_usd`): gross resting notional may not exceed
+  the approved pUSD — a hard wallet constraint checked pre-submit, distinct from the
+  strategy gross cap. First-order proxy (doesn't yet model fills consuming collateral).
+- **Quote telemetry** (`quote_telemetry_enabled` → `quote_telemetry.csv`): per-reconcile
+  mid/spread/quote/dist/Qmin/vol/ACR-risk/eligible, drained on the logger thread. This
+  is **Roadmap #1** — the raw capture to finally measure adverse selection / net.
+- **Near-miss-live audit** (`near_miss_live.csv`, mocklive): logs any quote a venue
+  would reject — off-grid, beyond `max_spread`, or self-crossed.
+
+`live_test` covers all of the above deterministically (Keccak vectors, typehash/domain
+stability as a regression guard, digest determinism + field-sensitivity, gateway
+mode-parity, allowance, throttle, validator).
 
 ---
 
@@ -359,10 +463,21 @@ JSON (see `config.strategy.json`). Selected keys:
 | **`acr_inv_skew_per_share_thou`** | quote shift per share of inventory (flattening) |
 | **`acr_vol_widen_k`** | widen each side by `k × mid-vol EWMA` |
 | **`command_queue_capacity`** | OMS → cancel-sender ring size |
-| **`sender_cpu`** | cancel-sender thread pinning (−1 = unpinned) |
+| **`sender_cpu`** / **`sender_priority`** | cancel-sender pinning (−1 = unpinned) / SCHED_FIFO priority |
+| **`sender_park_after_idle_us`** | 0 = sender busy-polls (lowest latency); >0 = park-when-idle (frees the core) |
+| **`exec_mode`** | `shadow` (log), `mocklive` (build v2 order + EIP-712 digest, no key/send), `live` (gated) |
+| **`live_maker_address`** / **`live_signer_address`** / **`live_signature_type`** | (mock) signer identity; placeholders until custody |
+| **`risk_pusd_allowance_usd`** | simulated pUSD allowance cap (0 = unlimited) |
+| **`quote_throttle_enabled`** / **`_min_ms`** / **`_max_ms`** / **`_vol_hot_thou`** | adaptive throttle on/off, cadence bounds, volatility threshold |
+| **`quote_telemetry_enabled`** / **`_log_file`** / **`_queue_capacity`** | per-reconcile telemetry capture → CSV |
+| **`near_miss_live_log_file`** | mocklive off-grid/too-wide/crossed audit CSV |
+| **`dead_mans_switch_seconds`** | feed stale > this ⇒ cancel-all + halt new orders (0 = off) |
+| **`reward_refresh_seconds`** | re-fetch reward config every N s (markets rotate `rates:null`; 0 = startup-only) |
+| **`ws_tls13_enabled`** / **`ws_permessage_deflate`** | transport A/B (TLS 1.3 negotiate; WS compression) |
 
 Example configs in the repo: `config.live.json` (crypto scanner),
 `config.rewards.json` (reward-active maker), `config.acr.json` (maker + ACR),
+`config.mocklive.json` (maker + ACR + MockLive EIP-712 + throttle + telemetry),
 `config.quiet.json` (WS timeout test), `config.strategy.json` (base settings).
 
 ---
@@ -375,6 +490,8 @@ Example configs in the repo: `config.live.json` (crypto scanner),
 | `tools/ws_schema_dump.py` | capture raw v2 WS frames → `ws_raw_frames.jsonl` |
 | `tools/fill_sim.py` | shadow fill simulator + net-PnL estimate (reward markets) |
 | `tools/hedge_arb_test.py` | live paper test for buy/sell-both free-arb (proves no taker free lunch) |
+| `tools/verify_eip712.py` | reconcile the v2 EIP-712 typehash/domain on-chain (resolve the neg-risk name) |
+| `tools/profile_run.py` | 5-min `/proc` sampler (mem, per-core CPU, ctxt-switches, net) → `analysis/profile_plots.py` |
 
 All gamma/CLOB calls need a `User-Agent` header (else 403).
 To build a rewards config, select reward-active markets from
@@ -392,14 +509,19 @@ src/
   orderbook.{hpp,cpp} dense ladder + occupancy bitmap best-tracking
   arbitrage.{hpp,cpp} taker/maker/group arb checks, fail-closed fees
   rewards.{hpp,cpp}   liquidity-rewards quoting strategy (scoring + quoter)   [maker]
-  oms.{hpp,cpp}       OMS state machine + risk gate + ThreadedGateway/ShadowGateway [maker]
+  oms.{hpp,cpp}       OMS state machine + risk gate + ThreadedGateway/ShadowGateway + ExecMode [maker]
   acr.hpp             Anti-Cancel-Race engine (header-only: at-risk, skew, vol-width) [maker]
+  throttle.hpp        adaptive quote throttle (calm/volatile cadence; ACR bypass) [maker]
+  eip712.hpp          Keccak-256 (OpenSSL) + v2 EIP-712 digest (UNVERIFIED on-chain) [mocklive]
+  live_order.hpp      v2 LiveOrderPayload + reward-quote→order mapping + quote validator [mocklive]
+  mock_live_gateway.* MockLiveGateway (build order + digest, no key/send) + NearMissLiveLog [mocklive]
   market_metadata.*   gamma fee/tick fetch + ClobRewardsClient (reward config)
   logger.{hpp,cpp}    CSV + summary (latency incl. feed-delivery, edges, P&L)
-  pipeline.hpp        SPSC ring, MessageSlot, MetricsEvent, OrderCommand
+  pipeline.hpp        SPSC ring, MessageSlot, MetricsEvent, OrderCommand, QuoteTelemetryEvent
   types.hpp           Price/Size/book/contract/config structs, clocks
 tests/
-  test_executor.cpp   39 deterministic checks (strategy + OMS + ACR)
+  test_executor.cpp   35 deterministic checks (strategy + OMS + ACR)
+  live_test.cpp       29 deterministic checks (Keccak/EIP-712 + v2 mapping + MockLive + throttle + allowance)
 tools/                config builders, schema dump, fill simulator, hedge-arb test
 deploy/setup_ec2.sh   provision a fresh EC2 box
 ```
@@ -469,34 +591,142 @@ keys-and-money line. Building it requires, in order:
    account/IP. This gates everything.
 2. **Verify v2 signing specs** against current docs/on-chain: Exchange contract
    address, chainId, **pUSD** collateral, EIP-712 Order struct, L2 auth header
-   scheme. Do not build from memory.
+   scheme. Do not build from memory. *(Partly done: spec verified-from-docs and
+   encoded in `src/eip712.hpp`; MockLive computes real digests from it. Still
+   needs on-chain reconciliation — one open field, the neg-risk domain `name` —
+   before any digest is trusted for a signature. `MockLiveGateway::describe()`
+   prints the values to reconcile.)*
 3. **Key custody** decision (HSM/KMS/hot-wallet blast radius).
-4. `LiveGateway` implementing `IExecGateway`: EIP-712 signer (pre-compute domain
-   separator; pre-serialize templates), L2-authed REST POST/DELETE, the
-   authenticated **user WS** for real fills, on-chain allowance setup.
+4. `LiveGateway` implementing `IExecGateway`: EIP-712 signer (the digest is
+   already computed by `eip712.hpp` — add the ECDSA sign over it), L2-authed REST
+   POST/DELETE, the authenticated **user WS** for real fills, on-chain allowance
+   setup. *(The seam + order serialization + digest exist via MockLive; the
+   remaining delta is the key, the signature, and the network calls.)*
 5. **Fill-probability / adverse-selection model** from a long capture or tiny live
-   posting — the only way to turn "gross ceiling" into a trustworthy net.
+   posting — the only way to turn "gross ceiling" into a trustworthy net. *(The
+   capture is now built — `quote_telemetry.csv`; run it for hours/days.)*
 
-Until then: scanner is read-only; maker is shadow-only.
+Until then: scanner is read-only; maker is shadow/mocklive-only (no key, no send).
+
+---
+
+## Known limitations & improvement backlog
+
+A candid map of what's solid, what's been addressed, and what's still open — by
+category. **✅ done in-repo · ⚠️ open · 🔒 gated on compliance.**
+
+**Strategy**
+- ⚠️ **Adverse selection is unmeasured → net P&L unproven.** The single biggest
+  unknown. The telemetry capture (`quote_telemetry.csv`) is built — run it for
+  hours/days and fold into `fill_sim.py`. This is the go/no-go for the true-LP shift.
+- ⚠️ Capacity-bound / competition-compressed — a small-capital niche, not scalable.
+- ⚠️ ACR is **defensive-only** from Ireland (~10 ms) — don't build on winning the
+  cancel-race; *smarts* (toxicity-aware cancels, optimal defensive spread) beat speed.
+
+**Architecture / live-safety**
+- ✅ **Dead-man's-switch** — feed-stale → cancel-all + halt new orders; resumes on
+  data return (`dead_mans_switch_seconds`). Closes the "orphaned orders on disconnect"
+  gap.
+- ✅ **Runtime kill switch** (`Oms::set_kill_switch`) — manual/automatic halt.
+- ✅ **Startup reconciliation seam** (`IExecGateway::adopt_open_orders`) — the live
+  plug-in point so a restart/crash doesn't orphan resting orders (no-op in shadow/mock).
+- ✅ **Reward-config refresh** — markets going `rates:null` mid-session are now picked
+  up (`reward_refresh_seconds`, applied via a single-writer SPSC ring, no hot-path lock).
+
+**Spec**
+- ⚠️ **v2 EIP-712 UNVERIFIED on-chain** — run `python3 tools/verify_eip712.py --rpc
+  <your Polygon RPC>` to reconcile `ORDER_TYPEHASH` + domain separators against the
+  deployed Exchange and resolve the neg-risk domain `name` (A vs B). The offline
+  cross-check (independent Python keccak vs the C++/OpenSSL path) already matches.
+- ⚠️ v2 fee formula unvalidated (captured `fee_rate_bps` were 0).
+
+**Latency / infra**
+- ✅ Audit cleanups: logger DRY, keccak caching (≈2.96→1.96 µs/digest), token_id
+  `string_view` (no ring-copy alloc), OMS MRU lookup, message-ring 128→32 MB, dead
+  buffer removed, cache-aligned ring slots. Sender p99 155→49 µs.
+- ⚠️ Host µs-stack (kernel bypass, isolcpus, ENA) — **only material once colocated**;
+  see the runbook above.
+
+**Compliance**
+- 🔒 Jurisdiction/KYB gate blocks live (gate #1). Running infra in London (eu-west-2)
+  to gain cancel latency is **operating from a restricted region** — the sanctioned
+  way to be in London is the **KYB colocation**, not a split-instance workaround.
 
 ---
 
 ## Roadmap
 
-1. **Capture-to-disk + offline replay** for `fill_sim.py` (hours/days) → a
-   trustworthy net-of-adverse-selection number. *(Zero risk; do first.)*
-2. **Deploy to Ireland (eu-west-1)** — the engine is London (eu-west-2, banned to
-   run from), so eu-west-1 (~10–12 ms) is the fastest compliant spot and is what
-   makes ACR's cancel-race winnable. A/B vs Amsterdam/Frankfurt with the binary
-   (use round-trip, not the skew-prone one-way; run chrony).
-3. Validate the v2 fee formula against a non-zero `last_trade_price.fee_rate_bps`.
-4. Live execution milestone (only after clearance) — see above.
-5. Kernel bypass / busy-poll / CPU isolation — saves only host µs (noise vs the ms
-   network); do *after* the Ireland move, and only if profiling says host time
-   matters at that location.
+1. **Run the quote-telemetry capture for hours/days** (now built —
+   `quote_telemetry.csv`) and fold it into `fill_sim.py` offline replay → a
+   trustworthy net-of-adverse-selection number. *(Zero risk; do first.)* This is
+   **the** number that decides whether the true-LP shift makes money.
+2. **Pick the region empirically, then deploy.** Polymarket designates **eu-west-1
+   (Ireland) as the closest *unrestricted* region** (engine in eu-west-2, geo-
+   restricted). On AWS, eu-west-1 likely beats Amsterdam via AWS's backbone to
+   eu-west-2 — but A/B candidates on `cf-ray` PoP + warm TCP-connect RTT before
+   committing (run chrony/PTP; trust round-trip, not one-way). The bigger lever is
+   **KYB colocation in eu-west-2** (sub-ms, direct, sub-Cloudflare) — gated by
+   compliance, and likely overkill for a rewards-LP.
+3. **Reconcile the v2 EIP-712 spec on-chain** (resolve the neg-risk domain `name`;
+   confirm `ORDER_TYPEHASH` + domain separators against the deployed Exchange).
+4. Validate the v2 fee formula against a non-zero `last_trade_price.fee_rate_bps`.
+5. Live execution milestone (only after clearance) — add ECDSA signing over the
+   MockLive digest + L2 auth + allowances; see above.
+6. Host µs-stack (kernel bypass / busy-poll / CPU isolation / ENA / placement
+   groups) — **only material if you colocate**; noise vs the ms network while
+   remote. Defer until colocated and only if profiling says host time matters.
+
+### Runbook — host tuning (ONLY once colocated; noise while remote)
+All of this is **p99-jitter (tail) polish that saves microseconds** — it is *noise*
+against the ms network until you colocate, so do it last. Sourced from the canonical
+[rigtorp low-latency guide](https://rigtorp.se/low-latency-guide/) + the
+[AWS tick-to-trade](https://aws.amazon.com/blogs/web3/optimize-tick-to-trade-latency-for-digital-assets-exchanges-and-trading-platforms-on-aws/) posts.
+
+- **Core isolation** (boot): `isolcpus=2,4,6 nohz_full=2,4,6 rcu_nocbs=2,4,6` — reserve
+  **full physical cores** (not HT siblings of each other) for receiver/parser/sender.
+- **Config**: `"sender_cpu": 6, "sender_priority": 80`, plus `receiver_cpu`/`parser_cpu`,
+  `lock_memory: true` (mlockall), `prefault_stack_kb`. The binary applies affinity +
+  SCHED_FIFO via `apply_thread_runtime_tuning`.
+- **Disable SMT/hyperthreading**: `nosmt` (or `echo off > /sys/devices/system/cpu/smt/control`).
+- **Frequency**: performance governor + turbo on; **disable deep C-states** (`intel_idle.max_cstate=1`).
+- **Memory**: `transparent_hugepage=never`, `swapoff -a`, optional explicit huge pages;
+  the binary already `mlock`s + prefaults when `lock_memory:true`.
+- **IRQ affinity**: steer NIC/timer IRQs off the isolated cores (`IRQBALANCE_BANNED_CPUS`).
+- **Already in the code**: `TCP_NODELAY` (set), simdjson parser reuse, lock-free SPSC with
+  cache-line-aligned indices+slots, allocation-free hot path. **Don't** enable
+  `permessage-deflate` for steady-state (it costs more than it saves on ~600 B frames).
+- **Kernel bypass (DPDK/OpenOnload)** and **busy-poll**: ~20–50 µs → ~1–5 µs on the host
+  send path — only worth it *colocated*, and only if profiling says host time matters
+  there. Skip while remote.
+
+`deploy/tune_low_latency.sh --cores 2,4,6 [--apply-grub]` applies all of the above
+(governor, C-states, THP, IRQ steering, sysctls, rt/mlock limits, and the GRUB
+isolcpus/nohz_full line).
+
+### Profiling (measured, 2026-06) — what the host actually does
+
+A 5-min live capture (`tools/profile_run.py` → `analysis/profile_plots.py`; 5,576
+frames + 1,495 system samples) on the dev box:
+
+- **In-process is excellent:** e2e **p50 3.0 µs** (queue 1.1 + parse 1.8 + book
+  **0.02**), **no memory leak** (RSS flat ~51 MB), book-update near-free (bitmap).
+- **The whole tail is preemption, not code:** e2e p99.9 **57 µs** / max 388 µs — the
+  worst *steady-state* frames are small 620-byte frames that took 30–100 µs **in
+  parse**, coinciding with **9.1/s involuntary context switches** (the OS preempting
+  the busy-poll threads on **un-isolated** cores; voluntary switches = 0). So
+  `isolcpus`+`nohz_full` is the *measured* fix — it removes the preemptions that
+  literally are the p99.9 tail. simdjson isn't the bottleneck; the scheduler is.
+- **Busy-poll burns ~2 cores** (parser core 4 + sender, both ~100%) by design. The
+  sender spins a full core for ~12 events in 5 min — on a small/shared box set
+  **`sender_park_after_idle_us`** >0 to park it when idle (0 = pure spin on a
+  dedicated isolated core).
+
+Re-run any time: `python3 tools/profile_run.py --duration 300 && python3 analysis/profile_plots.py`.
 
 ---
 
-*Scanner is read-only; the maker is shadow-only. No keys, no live orders, no money
-at risk. Reward/PnL figures are gross, snapshot, order-of-magnitude estimates with
-unproven net — not financial advice or a performance promise.*
+*Scanner is read-only; the maker is shadow/mocklive-only — MockLive builds real v2
+orders and EIP-712 digests but holds no key, signs nothing, and sends nothing. No
+keys, no live orders, no money at risk. The v2 signing spec is verified-from-docs
+but UNVERIFIED on-chain. Reward/PnL figures are gross, snapshot, order-of-magnitude
+estimates with unproven net — not financial advice or a performance promise.*

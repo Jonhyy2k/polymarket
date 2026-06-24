@@ -4,13 +4,21 @@
 #include <sstream>
 #include <thread>
 #include <chrono>
+#include <openssl/ssl.h>
 
 WebSocketClient::WebSocketClient(const Config& config)
     : config_(config)
-    , ssl_ctx_(ssl::context::tlsv12_client)
+    // Generic TLS client context negotiates the highest mutually-supported
+    // version (up to 1.3) instead of pinning 1.2. Steady-state latency is
+    // unchanged (handshake only), but 1.3 trims a round trip on (re)connect.
+    , ssl_ctx_(ssl::context::tls_client)
 {
     ssl_ctx_.set_default_verify_paths();
     ssl_ctx_.set_verify_mode(ssl::verify_peer);
+    SSL_CTX_set_min_proto_version(ssl_ctx_.native_handle(), TLS1_2_VERSION);
+    if (!config_.ws_tls13_enabled) {
+        SSL_CTX_set_max_proto_version(ssl_ctx_.native_handle(), TLS1_2_VERSION);  // A/B: force 1.2
+    }
     buffer_.reserve(MessageParser::kBufferCapacity);
 }
 
@@ -52,6 +60,15 @@ bool WebSocketClient::do_connect() {
         // Reset the WebSocket stream (use beast::tcp_stream for timeout support)
         ws_ = std::make_unique<websocket::stream<beast::ssl_stream<beast::tcp_stream>>>(
             ioc_, ssl_ctx_);
+
+        // Optional permessage-deflate (A/B). At ~600B steady-state frames the
+        // per-frame deflate CPU can cost more than it saves; its real win is the
+        // ~48KB initial-dump burst. Off by default — measure before enabling.
+        if (config_.ws_permessage_deflate) {
+            websocket::permessage_deflate pmd;
+            pmd.client_enable = true;
+            ws_->set_option(pmd);
+        }
 
         // DNS resolve
         tcp::resolver resolver(ioc_);

@@ -8,6 +8,8 @@
 #include "rewards.hpp"
 #include "oms.hpp"
 #include "acr.hpp"
+#include "throttle.hpp"
+#include "mock_live_gateway.hpp"
 #include "runtime.hpp"
 #include "pipeline.hpp"
 
@@ -178,6 +180,51 @@ Config load_config(const std::string& path) {
         config.command_queue_capacity = (size_t)iv;
     if (!doc["sender_cpu"].get_int64().get(iv))
         config.sender_cpu = (int)iv;
+    if (!doc["sender_priority"].get_int64().get(iv))
+        config.sender_priority = (int)iv;
+    if (!doc["sender_park_after_idle_us"].get_int64().get(iv) && iv >= 0)
+        config.sender_park_after_idle_us = (uint32_t)iv;
+    // Execution mode + (mock) live signer identity.
+    if (!doc["exec_mode"].get_string().get(sv))
+        config.exec_mode = std::string(sv);
+    if (!doc["live_maker_address"].get_string().get(sv))
+        config.live_maker_address = std::string(sv);
+    if (!doc["live_signer_address"].get_string().get(sv))
+        config.live_signer_address = std::string(sv);
+    if (!doc["live_signature_type"].get_int64().get(iv))
+        config.live_signature_type = (int)iv;
+    if (!doc["near_miss_live_log_file"].get_string().get(sv))
+        config.near_miss_live_log_file = std::string(sv);
+    if (!doc["risk_pusd_allowance_usd"].get_double().get(dv))
+        config.risk_pusd_allowance_usd = dv;
+    // Adaptive quote throttle.
+    if (!doc["quote_throttle_enabled"].get_bool().get(bv))
+        config.quote_throttle_enabled = bv;
+    if (!doc["quote_throttle_min_ms"].get_int64().get(iv))
+        config.quote_throttle_min_ms = (uint32_t)iv;
+    if (!doc["quote_throttle_max_ms"].get_int64().get(iv))
+        config.quote_throttle_max_ms = (uint32_t)iv;
+    if (!doc["quote_throttle_vol_hot_thou"].get_double().get(dv))
+        config.quote_throttle_vol_hot_thou = dv;
+    // Quote telemetry capture.
+    if (!doc["quote_telemetry_enabled"].get_bool().get(bv))
+        config.quote_telemetry_enabled = bv;
+    if (!doc["quote_telemetry_log_file"].get_string().get(sv))
+        config.quote_telemetry_log_file = std::string(sv);
+    if (!doc["quote_telemetry_queue_capacity"].get_int64().get(iv) && iv > 0)
+        config.quote_telemetry_queue_capacity = (size_t)iv;
+    // Live-safety + reward-rotation.
+    if (!doc["dead_mans_switch_seconds"].get_int64().get(iv))
+        config.dead_mans_switch_seconds = (int)iv;
+    if (!doc["reward_refresh_seconds"].get_int64().get(iv))
+        config.reward_refresh_seconds = (int)iv;
+    if (!doc["reward_update_queue_capacity"].get_int64().get(iv) && iv > 0)
+        config.reward_update_queue_capacity = (size_t)iv;
+    // WebSocket transport A/B.
+    if (!doc["ws_tls13_enabled"].get_bool().get(bv))
+        config.ws_tls13_enabled = bv;
+    if (!doc["ws_permessage_deflate"].get_bool().get(bv))
+        config.ws_permessage_deflate = bv;
     if (!doc["pin_thread_cpu"].get_int64().get(iv))
         config.pin_thread_cpu = (int)iv;
     if (!doc["receiver_cpu"].get_int64().get(iv))
@@ -618,6 +665,13 @@ int main(int argc, char* argv[]) {
     // OMS(parser thread) -> cancel-sender thread. Cancels/creates leave the hot
     // path here so ACR detection never blocks on the gateway's I/O.
     auto command_queue = std::make_unique<SpscRing<OrderCommand>>(config.command_queue_capacity);
+    // Quote telemetry (parser thread -> logger thread); off the hot timing path.
+    auto quote_telemetry_queue =
+        std::make_unique<SpscRing<QuoteTelemetryEvent>>(config.quote_telemetry_queue_capacity);
+    std::atomic<uint64_t> dropped_quote_telemetry{0};
+    // Reward-refresh thread -> parser thread (markets going rates:null mid-session).
+    auto reward_update_queue =
+        std::make_unique<SpscRing<RewardConfigUpdate>>(config.reward_update_queue_capacity);
     // Cancel-sender telemetry (written only by the sender thread; read after join).
     std::atomic<bool> sender_stop{false};
     LatencyTracker sender_send_us;
@@ -660,6 +714,12 @@ int main(int argc, char* argv[]) {
         }
     };
 
+    auto push_quote_telemetry = [&](const QuoteTelemetryEvent& qt) {
+        if (!quote_telemetry_queue->try_push_copy(qt)) {
+            dropped_quote_telemetry.fetch_add(1, std::memory_order_relaxed);
+        }
+    };
+
     std::thread logger_thread([&] {
         apply_thread_runtime_tuning(
             "logger",
@@ -667,8 +727,38 @@ int main(int argc, char* argv[]) {
             config.logger_priority > 0 ? config.logger_priority : config.realtime_priority,
             config.prefault_stack_kb);
 
+        // Quote-telemetry CSV is owned by (and written only on) this thread.
+        std::ofstream qt_file;
+        if (config.quote_telemetry_enabled) {
+            qt_file.open(config.quote_telemetry_log_file, std::ios::out);
+            if (qt_file) {
+                qt_file << "sample_ns,token,mid_thou,spread_thou,bid_px,ask_px,bid_dist_thou,"
+                           "ask_dist_thou,est_qmin,net_position,vol_thou,bid_at_risk,ask_at_risk,"
+                           "off_grid,too_wide,eligible,neg_risk\n";
+            }
+        }
+        auto drain_quote_telemetry = [&]() -> bool {
+            bool did = false;
+            QuoteTelemetryEvent* qt = nullptr;
+            while (quote_telemetry_queue->front(qt)) {
+                did = true;
+                if (qt_file) {
+                    qt_file << qt->sample_ns << ',' << qt->token << ',' << qt->mid_thou << ','
+                            << qt->spread_thou << ',' << qt->bid_px << ',' << qt->ask_px << ','
+                            << qt->bid_dist_thou << ',' << qt->ask_dist_thou << ','
+                            << qt->est_qmin << ',' << qt->net_position << ',' << qt->vol_thou << ','
+                            << (qt->bid_at_risk ? 1 : 0) << ',' << (qt->ask_at_risk ? 1 : 0) << ','
+                            << (qt->off_grid ? 1 : 0) << ',' << (qt->too_wide ? 1 : 0) << ','
+                            << (qt->eligible ? 1 : 0) << ',' << (qt->neg_risk ? 1 : 0) << '\n';
+                }
+                quote_telemetry_queue->pop();
+            }
+            return did;
+        };
+
         while (g_running || !receiver_done.load() || !metrics_queue->empty() ||
-               !opportunity_queue->empty() || !replay_queue->empty()) {
+               !opportunity_queue->empty() || !replay_queue->empty() ||
+               !quote_telemetry_queue->empty()) {
             bool did_work = false;
 
             MetricsEvent* metric = nullptr;
@@ -725,6 +815,8 @@ int main(int argc, char* argv[]) {
                 logger->consume_replay_snapshot(*snapshot);
                 replay_queue->pop();
             }
+
+            did_work |= drain_quote_telemetry();
 
             logger->flush_pending_csv();
             logger->maybe_print_summary();
@@ -786,17 +878,51 @@ int main(int argc, char* argv[]) {
         receiver_done = true;
     });
 
+    // Execution mode selects the send-side gateway: Shadow logs; MockLive builds
+    // the real v2 order + EIP-712 digest (no key/sign/send); Live is gated/unbuilt.
+    // Built here in main scope so the sender thread uses it and the summary reads
+    // its stats after join. Everything upstream (OMS/reconcile/risk/ACR) is
+    // mode-agnostic — it only ever sees the IExecGateway* below.
+    ExecMode exec_mode = ExecMode::Shadow;
+    if (config.exec_mode == "mocklive") exec_mode = ExecMode::MockLive;
+    else if (config.exec_mode == "live") exec_mode = ExecMode::Live;
+
+    ShadowGateway shadow_exec(config.shadow_executor_verbose);
+    live::SignerConfig signer_cfg;
+    signer_cfg.maker = config.live_maker_address;
+    signer_cfg.signer = config.live_signer_address;
+    signer_cfg.signature_type = static_cast<live::SigType>(config.live_signature_type);
+    live::MockLiveGateway mock_exec(signer_cfg, config.shadow_executor_verbose);
+
+    IExecGateway* exec_ptr = &shadow_exec;
+    if (config.shadow_executor_enabled) {
+        if (exec_mode == ExecMode::MockLive) {
+            exec_ptr = &mock_exec;
+            live::MockLiveGateway::describe();
+        } else if (exec_mode == ExecMode::Live) {
+            std::printf("\n[LIVE] *** execution path is NOT built and is GATED "
+                        "(compliance/custody/v2 signing). Running SHADOW — no orders sent. ***\n\n");
+            // exec_ptr stays &shadow_exec: nothing is ever signed or sent.
+        }
+        std::printf("[EXEC] mode=%s\n", exec_mode_name(exec_mode));
+    }
+
     // Cancel-sender thread: drains the OMS command ring and executes the actual
-    // create/cancel (ShadowGateway now; LiveGateway later). Pinned, off the hot
-    // path, so ACR detection on the parser thread never blocks on I/O.
+    // create/cancel via the selected gateway. Pinned, off the hot path, so ACR
+    // detection on the parser thread never blocks on the gateway's work.
     std::thread sender_thread([&] {
         if (!config.shadow_executor_enabled) { return; }
         apply_thread_runtime_tuning(
             "sender",
             config.sender_cpu,
-            config.realtime_priority,
+            config.sender_priority > 0 ? config.sender_priority : config.realtime_priority,
             config.prefault_stack_kb);
-        ShadowGateway exec(config.shadow_executor_verbose);
+        IExecGateway& exec = *exec_ptr;
+        // Idle policy: spin hot, but if sender_park_after_idle_us>0, park (sleep)
+        // once we've spun a short window with no work — frees the core when truly
+        // idle (cancels are rare). Stays hot right after activity (covers bursts).
+        const uint32_t park_us = config.sender_park_after_idle_us;
+        uint64_t idle_spins = 0;
         while (!sender_stop.load(std::memory_order_acquire) || !command_queue->empty()) {
             OrderCommand* cmd = nullptr;
             if (command_queue->front(cmd)) {
@@ -807,8 +933,36 @@ int main(int argc, char* argv[]) {
                     sender_send_us.record(static_cast<double>(t_exec - cmd->decided_ns) / 1000.0);
                 }
                 command_queue->pop();
+                idle_spins = 0;
+            } else if (park_us > 0 && ++idle_spins > 1024) {
+                std::this_thread::sleep_for(std::chrono::microseconds(park_us));
             } else {
                 cpu_relax();
+            }
+        }
+    });
+
+    // Reward-config refresh thread: markets rotate (rates:null) mid-session; re-fetch
+    // each market every reward_refresh_seconds and hand updates to the parser thread
+    // via an SPSC ring (parser is the sole writer of Contract reward fields — no lock
+    // on the hot read path). Off by default (reward_refresh_seconds=0).
+    std::thread reward_refresh_thread([&] {
+        if (!config.shadow_executor_enabled || config.reward_refresh_seconds <= 0) return;
+        apply_thread_runtime_tuning("reward-refresh", -1, 0, config.prefault_stack_kb);
+        ClobRewardsClient client;
+        while (g_running) {
+            for (int s = 0; s < config.reward_refresh_seconds && g_running; ++s)
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+            if (!g_running) break;
+            for (size_t i = 0; i < config.contracts.size(); ++i) {
+                if (config.contracts[i].condition_id.empty()) continue;
+                RewardConfigRaw rc;
+                std::string err;
+                if (!client.fetch(config.contracts[i].condition_id, rc, err)) continue;  // keep last
+                RewardConfigUpdate u{static_cast<uint32_t>(i), rc.active,
+                                     static_cast<uint16_t>(rc.max_spread_thou),
+                                     static_cast<uint32_t>(rc.min_size), rc.daily_rate_usd};
+                reward_update_queue->try_push_copy(u);  // drop if full; re-sent next cycle
             }
         }
     });
@@ -842,7 +996,20 @@ int main(int argc, char* argv[]) {
     shadow_limits.max_gross_notional_usd = config.risk_max_gross_notional_usd;
     shadow_limits.max_position_shares = config.risk_max_position_shares;
     shadow_limits.max_open_orders_total = config.risk_max_open_orders_total;
+    shadow_limits.max_collateral_usd = config.risk_pusd_allowance_usd;  // pUSD allowance sim
     Oms shadow_oms(shadow_gateway, shadow_limits);
+
+    // Startup reconciliation seam: a LiveGateway rebuilds OMS state from the
+    // account's open orders so a restart/crash doesn't orphan resting orders.
+    // No-op for shadow/mock (no exchange state) — this is the live plug-in point.
+    if (config.shadow_executor_enabled) {
+        std::vector<ManagedOrder> resting;
+        if (exec_ptr->adopt_open_orders(resting)) {
+            std::printf("[OMS] startup reconciliation: %zu resting order(s) to adopt\n",
+                        resting.size());
+            // (A LiveGateway feeds `resting` into shadow_oms here.)
+        }
+    }
     double shadow_qmin_sum = 0.0;     // Σ est_qmin over reconciles (telemetry)
     uint64_t shadow_qmin_count = 0;
     double shadow_daily_pool_sum = 0.0;  // Σ daily pool over eligible markets seen
@@ -856,6 +1023,21 @@ int main(int argc, char* argv[]) {
     acr_cfg.vol_widen_k = config.acr_vol_widen_k;
     LatencyTracker acr_react_us;   // parser-thread local; read after the loop
     uint64_t acr_events = 0;       // book updates where a resting quote was at-risk
+
+    // Adaptive quote throttle (suppress re-pricing churn; ACR/side-change bypass).
+    ThrottleConfig thr_cfg;
+    thr_cfg.enabled = config.quote_throttle_enabled;
+    thr_cfg.min_interval_ms = config.quote_throttle_min_ms;
+    thr_cfg.max_interval_ms = config.quote_throttle_max_ms;
+    thr_cfg.vol_hot_thou = static_cast<float>(config.quote_throttle_vol_hot_thou);
+    uint64_t throttle_skips = 0;   // reconciles suppressed by the throttle
+
+    // Pre-send quote audit -> near_miss_live.csv (mocklive only; rare writes,
+    // single-writer on this parser thread, off the hot timing path).
+    std::unique_ptr<live::NearMissLiveLog> near_miss_live;
+    if (config.shadow_executor_enabled && exec_mode == ExecMode::MockLive) {
+        near_miss_live = std::make_unique<live::NearMissLiveLog>(config.near_miss_live_log_file);
+    }
 
     auto collect_output = [&](const ArbCheckOutput& output, NanoTime t0_recv,
                               NanoTime t1_parse_done, NanoTime t2_books_done) -> uint16_t {
@@ -890,14 +1072,61 @@ int main(int argc, char* argv[]) {
         return output.checks_performed;
     };
 
+    // Dead-man's-switch state (parser-thread local).
+    const uint64_t dms_threshold_ns = config.dead_mans_switch_seconds > 0
+        ? static_cast<uint64_t>(config.dead_mans_switch_seconds) * 1000000000ull : 0;
+    uint64_t last_msg_ns = now_ns();
+    bool dms_fired = false;
+    uint64_t dms_trips = 0;
+
     while (g_running || !receiver_done.load() || !message_queue->empty()) {
+        // Apply any reward-config refreshes (this thread is the sole writer of the
+        // Contract reward fields the executor reads below — no lock needed).
+        {
+            RewardConfigUpdate* ru = nullptr;
+            while (reward_update_queue->front(ru)) {
+                if (ru->contract_index < config.contracts.size()) {
+                    Contract& rc = config.contracts[ru->contract_index];
+                    const bool was = rc.reward_active;
+                    rc.reward_active = ru->active;
+                    rc.reward_max_spread_thou = ru->max_spread_thou;
+                    rc.reward_min_size = ru->min_size;
+                    rc.reward_daily_rate_usd = ru->daily_rate_usd;
+                    if (was != ru->active)
+                        std::fprintf(stderr, "[REWARDS] %s now %s\n", rc.asset_name.c_str(),
+                                     ru->active ? "ACTIVE" : "inactive (rates:null)");
+                }
+                reward_update_queue->pop();
+            }
+        }
+
         MessageSlot* slot = nullptr;
         if (!message_queue->front(slot)) {
             if (receiver_done.load()) {
                 break;
             }
+            // Dead-man's-switch: feed stale while running → flatten (cancel every
+            // resting order) + halt new ones. A disconnect leaves orders
+            // un-managed at the exchange (no data to react to) = unbounded adverse
+            // selection. Re-arms (resumes quoting) when data returns below.
+            if (dms_threshold_ns && g_running && config.shadow_executor_enabled &&
+                !dms_fired && (now_ns() - last_msg_ns) > dms_threshold_ns) {
+                shadow_oms.cancel_everything();
+                shadow_oms.set_kill_switch(true);
+                dms_fired = true;
+                ++dms_trips;
+                std::fprintf(stderr, "[DMS] feed stale >%ds — cancelled all, halted new orders\n",
+                             config.dead_mans_switch_seconds);
+            }
             cpu_relax();
             continue;
+        }
+
+        last_msg_ns = now_ns();
+        if (dms_fired) {                       // feed resumed → re-enable quoting
+            shadow_oms.set_kill_switch(false);
+            dms_fired = false;
+            std::fprintf(stderr, "[DMS] feed resumed — quoting re-enabled\n");
         }
 
         if (config.metrics_enabled) {
@@ -1105,7 +1334,8 @@ int main(int argc, char* argv[]) {
         // inventory skew + vol widening, (4) OMS reconciles (cancels via sender thr).
         if (config.shadow_executor_enabled) {
             auto quote_token = [&](const std::string& tok, Orderbook& book,
-                                   const RewardConfig& rcfg, const RewardQuoteParams& params) {
+                                   const RewardConfig& rcfg, const RewardQuoteParams& params,
+                                   bool neg_risk) {
                 AcrEngine::update_vol(book);
                 const uint32_t mid2 = midpoint2_thou(book);
                 const LiveSide live = shadow_oms.live_side(tok);
@@ -1117,8 +1347,54 @@ int main(int argc, char* argv[]) {
                 DesiredQuotes base = RewardQuoter::quote(book, rcfg, params);
                 const double net_pos = shadow_oms.net_position(tok);
                 DesiredQuotes desired = AcrEngine::adjust(base, book, net_pos, acr_cfg);
-                shadow_oms.reconcile(tok, desired, mid2);
+
+                // Throttle: hold the resting quote between moves to preserve queue
+                // priority / spare rate limits; but NEVER block an action that must
+                // go out now — ACR at-risk, or a side being added/removed.
+                const bool side_change = (desired.bid.valid != live.bid.has) ||
+                                         (desired.ask.valid != live.ask.has);
+                const bool must_act = risk.any() || side_change;
+                const bool allowed = QuoteThrottle::allow(book, thr_cfg, now_ns(), must_act);
+
+                // Pre-send audit (mocklive): off-grid / too-wide / self-cross.
+                live::QuoteIssues issues{};
+                if (near_miss_live) {
+                    issues = live::validate_quote(desired, book.tick_thou,
+                                                  rcfg.max_spread_thou, mid2);
+                    near_miss_live->record(tok, mid2, book.tick_thou, desired, issues);
+                }
+
+                if (allowed) shadow_oms.reconcile(tok, desired, mid2, neg_risk);
+                else         ++throttle_skips;
+
                 if (base.eligible) { shadow_qmin_sum += base.est_qmin; ++shadow_qmin_count; }
+
+                // Quote telemetry (Roadmap #1) -> ring -> logger thread CSV.
+                if (config.quote_telemetry_enabled) {
+                    const int mid_thou = static_cast<int>(mid2 / 2);
+                    QuoteTelemetryEvent qt{};
+                    qt.sample_ns = now_realtime_ns();
+                    qt.token = tok;  // string_view into Contract token id (process-stable)
+                    qt.mid_thou = static_cast<uint16_t>(mid_thou);
+                    qt.spread_thou = (book.best_ask > book.best_bid)
+                        ? static_cast<uint16_t>(book.best_ask - book.best_bid) : 0;
+                    qt.bid_px = desired.bid.valid ? desired.bid.price : 0;
+                    qt.ask_px = desired.ask.valid ? desired.ask.price : 0;
+                    qt.bid_dist_thou = desired.bid.valid
+                        ? static_cast<int16_t>(static_cast<int>(desired.bid.price) - mid_thou) : 0;
+                    qt.ask_dist_thou = desired.ask.valid
+                        ? static_cast<int16_t>(static_cast<int>(desired.ask.price) - mid_thou) : 0;
+                    qt.est_qmin = static_cast<float>(base.est_qmin);
+                    qt.net_position = static_cast<float>(net_pos);
+                    qt.vol_thou = book.acr_vol_thou;
+                    qt.bid_at_risk = risk.bid_at_risk;
+                    qt.ask_at_risk = risk.ask_at_risk;
+                    qt.off_grid = issues.off_grid;
+                    qt.too_wide = issues.too_wide;
+                    qt.eligible = base.eligible;
+                    qt.neg_risk = neg_risk;
+                    push_quote_telemetry(qt);
+                }
             };
             for (Contract* contract : touched_contracts) {
                 if (!contract->reward_active) continue;
@@ -1133,8 +1409,8 @@ int main(int argc, char* argv[]) {
                     ? config.reward_quote_size : rcfg.min_size;
                 params.target_offset_thou = static_cast<Price>(config.reward_target_offset_thou);
 
-                quote_token(contract->token_id_yes, contract->book_yes, rcfg, params);
-                quote_token(contract->token_id_no, contract->book_no, rcfg, params);
+                quote_token(contract->token_id_yes, contract->book_yes, rcfg, params, contract->neg_risk);
+                quote_token(contract->token_id_no, contract->book_no, rcfg, params, contract->neg_risk);
                 shadow_daily_pool_sum += rcfg.daily_rate_usd;
             }
         }
@@ -1308,6 +1584,9 @@ int main(int argc, char* argv[]) {
     if (sender_thread.joinable()) {
         sender_thread.join();
     }
+    if (reward_refresh_thread.joinable()) {
+        reward_refresh_thread.join();
+    }
     if (logger_thread.joinable()) {
         logger_thread.join();
     }
@@ -1329,6 +1608,25 @@ int main(int argc, char* argv[]) {
                     sender_exec_creates, sender_exec_cancels, sstat.p50, sstat.p99, sstat.max);
         std::printf("[ACR] NOTE: react/send are IN-PROCESS only. Real cancel-race win = these +"
                     " network RTT to the London engine (~10-15ms from eu-west-1). No orders sent.\n");
+        if (config.quote_throttle_enabled) {
+            std::printf("[THROTTLE] reconciles suppressed (queue-priority hold)=%" PRIu64 "\n",
+                        throttle_skips);
+        }
+        if (config.dead_mans_switch_seconds > 0) {
+            std::printf("[DMS] dead-man's-switch trips (feed-stale flatten)=%" PRIu64
+                        " | armed at %ds stale\n", dms_trips, config.dead_mans_switch_seconds);
+        }
+        if (exec_mode == ExecMode::MockLive) {
+            const live::MockLiveStats& ms = mock_exec.stats();
+            std::printf("[MOCKLIVE] EIP-712 digests computed=%" PRIu64 " (creates) cancels=%" PRIu64
+                        " | last digest=%s\n", ms.digests, ms.cancels,
+                        eip712::to_hex(ms.last_digest).c_str());
+            std::printf("[MOCKLIVE] near-miss-live events (off-grid/too-wide/crossed)=%" PRIu64
+                        " -> %s | telemetry drops=%" PRIu64 "\n",
+                        near_miss_live ? near_miss_live->count() : 0,
+                        config.near_miss_live_log_file.c_str(),
+                        dropped_quote_telemetry.load(std::memory_order_relaxed));
+        }
     }
 
     const uint64_t oversize_drops = dropped_oversize_messages.load(std::memory_order_relaxed);

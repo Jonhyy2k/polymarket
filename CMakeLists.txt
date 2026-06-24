@@ -109,6 +109,7 @@ add_executable(arb_detector
     src/market_metadata.cpp
     src/rewards.cpp
     src/oms.cpp
+    src/mock_live_gateway.cpp
 )
 
 # Always -O3 -march=native for the hot path
@@ -123,6 +124,19 @@ add_executable(test_executor
 target_include_directories(test_executor PRIVATE src deps)
 target_compile_options(test_executor PRIVATE -O2)
 target_link_libraries(test_executor pthread)
+
+# Deterministic test for the (mock) live path: Keccak/EIP-712, the v2 order
+# mapping, the MockLiveGateway, the throttle, and the allowance gate. Links
+# OpenSSL for Keccak-256. Still NO keys, NO signing, NO network.
+add_executable(live_test
+    tests/live_test.cpp
+    src/rewards.cpp
+    src/oms.cpp
+    src/mock_live_gateway.cpp
+)
+target_include_directories(live_test PRIVATE src deps)
+target_compile_options(live_test PRIVATE -O2)
+target_link_libraries(live_test OpenSSL::Crypto pthread)
 
 target_link_libraries(arb_detector
     simdjson

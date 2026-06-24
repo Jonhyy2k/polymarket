@@ -23,7 +23,10 @@ enum class MetricsEventType : uint8_t {
     EDGE_SAMPLE
 };
 
-struct MetricsEvent {
+// alignas(64): each ring slot lands on its own cache line, so when the producer
+// (writing slot[head]) and consumer (reading slot[tail]) momentarily touch
+// adjacent slots (head≈tail), they don't false-share a line.
+struct alignas(64) MetricsEvent {
     MetricsEventType type = MetricsEventType::MESSAGE;
     uint32_t msg_bytes = 0;
     uint16_t event_count = 1;
@@ -44,6 +47,42 @@ struct MetricsEvent {
     uint8_t  leg_count = 0;
     int16_t  raw_edge_bps = 0;
     int16_t  net_edge_bps = 0;
+};
+
+// Per-reconcile snapshot for the quote-telemetry CSV (Roadmap #1: the raw data
+// to later measure adverse selection / net-of-fill). Pushed from the executor
+// (parser thread) and drained by the logger thread — off the hot timing path.
+// token is a string_view into the Contract's token_id (process-lifetime stable),
+// same pattern as ArbOpportunity::contract_name.
+struct alignas(64) QuoteTelemetryEvent {
+    NanoTime         sample_ns = 0;
+    std::string_view token;
+    uint16_t         mid_thou    = 0;
+    uint16_t         spread_thou = 0;
+    uint16_t         bid_px      = 0;
+    uint16_t         ask_px      = 0;
+    float            est_qmin    = 0.0f;
+    float            net_position = 0.0f;
+    float            vol_thou    = 0.0f;
+    int16_t          bid_dist_thou = 0;   // signed distance of bid from mid (thou)
+    int16_t          ask_dist_thou = 0;
+    bool             bid_at_risk = false;
+    bool             ask_at_risk = false;
+    bool             off_grid    = false;
+    bool             too_wide    = false;
+    bool             eligible    = false;
+    bool             neg_risk    = false;
+};
+
+// A refreshed reward config for one market (markets rotate rates:null mid-session).
+// Produced by the reward-refresh thread, applied by the parser thread (single
+// writer of Contract reward fields) — so no lock on the hot read path.
+struct RewardConfigUpdate {
+    uint32_t contract_index = 0;
+    bool     active = false;
+    uint16_t max_spread_thou = 0;
+    uint32_t min_size = 0;
+    double   daily_rate_usd = 0.0;
 };
 
 struct alignas(64) MessageSlot {

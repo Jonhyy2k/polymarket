@@ -86,6 +86,11 @@ private:
     bool benchmark_window_active();
     void print_summary(int interval_seconds);
     void reset_interval();
+    // Shared body for consume_book/price_change/bbo — they differ only in which
+    // event counter they bump; latency-sample handling is identical.
+    void consume_latency_event(uint64_t& counter, uint16_t count, bool has_latency_sample,
+                               float queue_us, float parse_us, float book_us,
+                               float arb_us, float e2e_us, uint16_t arb_checks);
 
     struct EdgeTracker {
         void record(int raw_edge_bps, int net_edge_bps) {
