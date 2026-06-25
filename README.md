@@ -56,19 +56,22 @@ A low-latency C++ system for Polymarket's CLOB **v2** that does two things:
 | Shadow fill simulator + net estimate | ✅ built & validated |
 | **ACR engine** (at-risk detect, skew, vol-width) | ✅ shadow, unit-tested |
 | **Threaded cancel-sender** (SPSC ring, pinned) | ✅ built, sub-µs hand-off |
-| **MockLive gateway** (v2 order + EIP-712 digest, keyless) | ✅ built, 12 digests on live data, unit-tested |
+| **MockLive gateway** (v2 order + EIP-712 digest, keyless) | ✅ built, 30 digests on live data, unit-tested |
 | **Adaptive quote throttle** (ACR-aware) | ✅ built, unit-tested |
 | **Quote telemetry capture** (adverse-selection groundwork) | ✅ built (CSV on logger thread) |
 | **pUSD allowance sim** (pre-trade gate) | ✅ built, unit-tested |
-| v2 EIP-712 spec | ⚠️ verified-from-docs, **UNVERIFIED on-chain** (1 open field) |
+| **EC2 deployed** (Ireland eu-west-1, kernel-tuned, verified) | ✅ c7i.4xlarge, nosmt/isolcpus/THP/RT, 0 invol ctx-switches |
+| v2 EIP-712 spec (offline) | ✅ ORDER_TYPEHASH + domain separators match eip712.hpp |
+| v2 EIP-712 spec (on-chain) | ⚠️ **UNVERIFIED** — public Polygon RPCs blocked from EC2; needs authenticated Alchemy/Infura RPC |
 | **Live execution (signing/auth/allowances)** | ❌ **not built — gated** |
-| Fill-probability model (trustworthy net) | ❌ needs the telemetry capture above over hours/days |
+| Fill-probability model (trustworthy net) | ❌ needs telemetry capture during active game windows |
 
-Latency (laptop, in-process `t0→t3`): parse p50 ~1.2µs, book p50 ~0.3µs, arb
-p50 ~0.6µs, e2e p50 ~3.5µs; OMS→sender hand-off p50 0.36µs / p99 2.2µs.
-**The matching engine is in London (AWS eu-west-2)**; feed delivery and order
-RTT are network-bound (see [Geography](#geography--latency)) and dominate the
-in-process pipeline by ~4 orders of magnitude.
+**Latency (Ireland EC2, measured 2026-06-25):** TCP connect to CF-DUB p50 1.63 ms;
+feed delivery (London→Ireland, one-way) p50 9.4 ms, min 7.8 ms; in-process
+e2e p50 **2.4 µs**, p99 7.3 µs; OMS→sender hand-off p50 ~1.3 µs / p99 ~100 µs.
+**The matching engine is in London (AWS eu-west-2)**; feed delivery and cancel RTT
+are network-bound (~16 ms round-trip from Ireland) and dominate the in-process
+pipeline by ~4 orders of magnitude. See [Geography](#geography--latency).
 
 ---
 
@@ -104,10 +107,21 @@ python3 tools/build_live_config.py config.live.json 16
 ./build/arb_detector --config config.rewards.json     # shadow_executor_enabled=true
 ```
 
+### Run the mocklive rewards bot (Ireland EC2)
+```bash
+# requires sudo for mlockall + SCHED_FIFO (CAP_IPC_LOCK + CAP_SYS_NICE)
+sudo nohup ./build/arb_detector --config config.live_ireland.json \
+  > /tmp/bot_telemetry.log 2>&1 &
+# fill simulator (run during active game windows for adversity data)
+python3 tools/fill_sim.py 3600 config.live_ireland.json
+# re-apply runtime tuning after reboot (GRUB bits persist; governor/IRQ/sysctl don't)
+sudo deploy/tune_low_latency.sh --cores 2,3,4,5
+```
+
 ### Tests
 ```bash
 ./build/test_executor   # 35 deterministic checks: scoring, Qmin, quoting, OMS, risk, fills, ACR
-./build/live_test       # 29 deterministic checks: Keccak/EIP-712, v2 mapping, MockLive, throttle, allowance
+./build/live_test       # 33 deterministic checks: Keccak/EIP-712, v2 mapping, MockLive, throttle, allowance, DMS
 ```
 
 ---
@@ -223,28 +237,30 @@ you control by location, the second is shared.
 > ~25 ms of **laptop NTP clock skew**. The clock-independent round-trip says
 > **London**. Trust round-trip, not skewed one-way.
 
-**Maker lifecycle latency, from the Lisbon laptop (measured RTT):**
+**Maker lifecycle latency — measured from the Ireland EC2 (2026-06-25, 30-sample TCP + 600s live feed):**
 
-| step | Lisbon (now) | Ireland eu-west-1 | London eu-west-2 (banned to run) |
-|---|---|---|---|
-| see a book update (engine → you) | ~17–18 ms | ~5 ms | ~1 ms |
-| post a quote (decision → resting at engine) | ~18–22 ms | ~6–8 ms | ~2 ms |
-| learn of a fill (engine → you) | ~17–18 ms | ~5 ms | ~1 ms |
-| **tick-to-react** (move at engine → your cancel back at engine) | **~35 ms** | **~10 ms** | ~2 ms |
+| step | Ireland eu-west-1 (measured) | London eu-west-2 KYB colo (estimated) |
+|---|---|---|
+| TCP connect → CF-DUB edge | min 1.40 ms, p50 1.63 ms | < 1 ms (direct, no CF) |
+| feed update (engine → you, one-way) | min 7.8 ms, **p50 9.4 ms**, p99 52 ms | ~1 ms |
+| cancel reaches engine (one-way) | ~8–9 ms | ~0.5 ms |
+| **tick-to-react** (move at engine → your cancel back) | **~16–18 ms** | **~1–2 ms** |
+| in-process e2e (recv → arb decision) | p50 **2.4 µs**, p99 7.3 µs | same |
 
-In-process work (~5 µs host total) is buried inside each row — it rounds to zero.
+In-process work rounds to zero versus network. The cancel race from Ireland vs a KYB-colocated maker is ~10× in latency — not winnable on speed. ACR's value is **smarts** (toxicity-aware cancels, optimal defensive spread), not speed.
 
 **Deployment (non-colocated):** the engine is in London (eu-west-2, geo-restricted
 to run from). Polymarket's docs designate **`eu-west-1` (Ireland) as the closest
-*unrestricted* region** — and because the engine is in AWS, an instance in AWS
-eu-west-1 can ride AWS's dedicated **inter-region backbone** to eu-west-2, which
-plausibly beats a geographically-closer **Amsterdam** that crosses public internet +
-Cloudflare (community reports claim Dublin 0–1 ms to the backend; unverified VPS
-marketing). This **revises an earlier steer toward Amsterdam**: Amsterdam's logic
-holds for the public CF endpoint, but for an AWS deploy Ireland is the intended path
-and likely wins. **Measure before committing** — A/B candidate regions on the
-`cf-ray` PoP + warm **TCP-connect RTT** (not the skew-prone one-way feed number),
-run **chrony/PTP**, trust round-trip.
+*unrestricted* region**. ✅ **Done: c7i.4xlarge eu-west-1 deployed, kernel-tuned,
+verified.** `cf-ray` PoP = DUB (Dublin). TCP-connect min 1.40 ms measured.
+
+**KYB colocation path (the sub-ms route):** a verified institutional maker
+(non-UK/non-restricted jurisdiction, KYB-approved by Polymarket) can colocate directly
+in AWS eu-west-2 (London) via Polymarket's market-maker program — a direct,
+sub-Cloudflare line to the engine. That is how professional MMs reach ~0.5 ms.
+It is the *sanctioned* route, gated on compliance (not a workaround), and worthwhile
+at $50k+ capital where the economics justify entity formation + KYB process. At
+sub-$10k scale, Ireland is the right starting point.
 
 **Implication:** the decisive lever is **location** (Lisbon → Ireland, or colo in
 eu-west-2), not host micro-optimization. Kernel bypass / io_uring / busy-poll / NIC
@@ -312,19 +328,21 @@ path):
 
 **Threading:** detection is inline (lowest latency); the cancel **send** is
 offloaded to the pinned cancel-sender thread via an SPSC `OrderCommand` ring.
-Measured in-process hand-off (OMS decide → sender send): **p50 0.36 µs / p99
-2.2 µs**. Reaction (book recv → at-risk detect) is sub-µs.
+Measured in-process hand-off (OMS decide → sender send): **p50 1.3 µs / p99
+~100 µs** (Ireland EC2, 25-min run). Reaction (book recv → at-risk detect) is
+sub-µs.
 
 **Honest caveats:**
 - The in-process µs is *not* the cancel time. The real cancel = detect + hand-off
-  + sign + **network RTT to London** + engine processing. From Lisbon, tick-to-react
-  is **~35 ms** (network-bound) → ACR can't win the race from a laptop. From
-  **eu-west-1 it's ~10 ms** and the race becomes winnable. ACR's value is gated by
-  *location* (see [Geography](#geography--latency)).
+  + **network RTT to London** (~16 ms round-trip from Ireland, measured) + engine
+  processing. A KYB-colocated maker in eu-west-2 reaches the engine in ~1–2 ms.
+  ACR cannot win the race on speed from Ireland — it wins on **smarts**: detect
+  toxicity earlier (book imbalance, trade-direction signals), calibrate defensive
+  spread to measured adversity, cancel only when it matters.
 - ACR's urgent cancel matters most when re-quoting is **throttled** (live rate
-  limits / queue-priority preservation). With re-quote-every-tick (the shadow
-  default) the base reconcile re-centers before drift builds, so at-risk rarely
-  fires — the unit tests prove detection works on real moves.
+  limits / queue-priority preservation). The throttle suppressed **73% of
+  reconciles** in the 25-minute Ireland run — ACR's bypass path is exactly when
+  it's needed.
 
 35 deterministic checks in `test_executor` cover scoring/Qmin/quoting/OMS/risk/
 fills + ACR (vol EWMA, at-risk cross & drift, skew, vol-widen). A second binary
@@ -407,34 +425,89 @@ mode-parity, allowance, throttle, validator).
 
 ## Strategy economics (rough, honest)
 
-Measured from live qualifying book depth + the fill simulator (2026-06-14).
-**All figures are GROSS reward (a ceiling), snapshots, and net is unproven.**
+**Measured 2026-06-25 on the Ireland EC2.** All figures are GROSS reward (ceiling),
+snapshots, and net is unproven. Do not cite without reading the caveats.
 
-- **Fills are rare** (~1 trade per token per ~7 min; thousands of price-changes per
-  trade). A maker one tick inside is seldom hit ⇒ low adverse selection ⇒ the
-  strategy is **reward-dominated by design**. In a 180s sim: 7 trades → 0 fills →
-  net ≈ gross (but that's too small a sample to *prove* low adverse selection).
-- **Capital scaling (greedy allocation, 60%-share cap):**
+### Active reward markets (2026-06-25, from `/sampling-markets`)
 
-  | capital | gross $/day | $/mo | %/day |
-  |---|---|---|---|
-  | ~$860 (€800) | ~$141 | ~$4,240 | 16% |
-  | ~$3,000 | ~$357 | ~$10,700 | 12% |
-  | ~$10,000 | ~$692 | ~$20,800 | 7% |
-  | ~$30,000 | ~$1,040 | ~$31,200 | 3.5% |
+`config.live_ireland.json` monitors 6 markets — 12 tokens, $10,046/day total pool:
 
-- **Strongly sublinear / capacity-bound:** 35× capital → ~7× reward. Thin markets
-  pay the most per dollar but saturate fast; big pools (World Cup, $3k/day) are
-  already saturated and pay ~$0. **This is a small-capital niche, not scalable.**
-- **⚠️ Double-digit %/day gross is a red flag, not a forecast.** It is gross of the
-  unmeasured adverse-selection cost, concentrated in 2–3 thin markets, and a
-  snapshot that competition compresses. Treat it as a ceiling you will not hit.
-  The real net needs hours/days of capture (or tiny live posting) to measure
-  adverse selection.
+| market | pool/day | spread | min size | neg_risk | mid (approx) |
+|---|---|---|---|---|---|
+| France wins 2026 FIFA World Cup | $3,182 | 4.5¢ | 200 | yes | 19% |
+| Argentina wins 2026 FIFA World Cup | $2,273 | 4.5¢ | 200 | yes | 14.8% |
+| Spain wins 2026 FIFA World Cup | $2,045 | 4.5¢ | 200 | yes | 13.8% |
+| England wins 2026 FIFA World Cup | $1,364 | 4.5¢ | 200 | yes | 10.5% |
+| Portugal wins 2026 FIFA World Cup | $682 | 4.5¢ | 200 | yes | 8.1% |
+| Fed rate hike in 2026? | $300 | 3.5¢ | 200 | no | 52.5% |
 
-**Capital model:** a two-sided quote on a binary market locks ≈ `size × $1` of
-USDC (YES bid at `p` + NO bid at `1−p`, since YES+NO=1, so you market-make both
-sides of YES with USDC only — no need to pre-hold shares).
+Replace the Republican House ($3/day, removed) with higher-pool markets as the
+tournament progresses and markets rotate.
+
+### Qmin score (measured)
+
+At 1-tick offset inside mid with 200-share size:
+- **World Cup tokens:** `((45-1)/45)² × 200 = 186.9` — constant for all 5 teams
+  (all have the same 4.5¢ max_spread and 200 min_size)
+- **Fed Rate Hike:** `((3.5-1)/3.5)² × 200 = 65.3` — tighter spread costs score
+- **Eligibility:** 100% — every quote placed in the 25-minute bot run was eligible
+
+### Reward-share estimate
+
+The reward formula is `my_Qmin / (field_Qmin_total + my_Qmin) × daily_pool`.
+`field_Qmin_total` (total competing maker depth) is **unmeasured** — this is the
+crux. The book has 29,770 price_change events/10 min across 3 markets; competition
+is heavy.
+
+| field_Qmin assumption | market share | gross/day (all 6 markets) |
+|---|---|---|
+| 50× ours (low competition) | ~2% | ~$200/day |
+| 200× ours (realistic) | ~0.5% | ~$50/day |
+| 1000× ours (heavy pro MMs) | ~0.1% | ~$10/day |
+
+Best honest estimate: **$10–50/day gross** with the current 6-market config. The
+professional MMs competing here quote 10-100× minimum size and likely dominate.
+
+### Capital required
+
+A two-sided quote on a binary locks ≈ `size × $1` in pUSD:
+YES bid at `p` + NO bid at `1−p` = 200 shares × $1 = **$200 collateral per market**.
+With 6 markets: ~$1,200 total. €500 ≈ $545 covers 2–3 markets (see colocation
+guide on which to prioritize).
+
+| capital | markets | estimated gross/day | net after adversity |
+|---|---|---|---|
+| €500 (~$545) | 2 big WC markets | $5–27/day | unknown — needs game-time data |
+| €2,000 | all 6 markets | $10–50/day | unknown |
+| KYB colo | all markets | $50–200/day | higher share, lower adversity |
+
+### Adverse selection (measured inter-game, 2026-06-25)
+
+In a 25-minute quiet-period run (no active games on Spain/France/Argentina/England/Portugal):
+- **Zero mid-price moves** across 62,316 eligible quotes on 12 tokens
+- **Zero fills** — trades happened but none hit our queue position
+- **Zero ACR at-risk events** (1 across the full session)
+- `inv_pnl = $0` in all fill_sim runs
+
+This is **not a go/no-go signal** — it is baseline data from a quiet period. The
+decisive measurement is **game-time adversity**: when a goal is scored, these markets
+move 100–200 thou instantly. From Ireland at ~16 ms cancel RTT, you will be filled
+before you can cancel. One goal-event fill on Spain at $0.14 → $0.30 = $32 loss on
+200 shares. **That's the unmeasured number that decides profitability.**
+
+**How to measure it:** run the bot during an active World Cup match window (games
+typically at 19:00/22:00 UTC). The `quote_telemetry.csv` will show ACR at-risk
+spikes and mid-vol EWMA; the fill_sim will capture actual fills with adverse marks.
+
+### ⚠️ What not to conclude
+
+- **Do not extrapolate fill_sim results from quiet periods.** 0 fills / $0 adversity
+  in an inter-game window is expected and tells you nothing about game-time risk.
+- **The earlier capital-scaling table (€800 → $141/day) was from thin, low-competition
+  markets and is no longer representative** now that big pools ($3k/day World Cup)
+  dominate. Those pools attract professional MMs; the share is much smaller.
+- **Double-digit %/day gross is noise from a small-sample quiet window**, not a
+  forecast. Competition compresses it.
 
 ---
 
@@ -488,9 +561,10 @@ Example configs in the repo: `config.live.json` (crypto scanner),
 |---|---|
 | `tools/build_live_config.py` | build a crypto scanner config from gamma (tag_id=21) |
 | `tools/ws_schema_dump.py` | capture raw v2 WS frames → `ws_raw_frames.jsonl` |
-| `tools/fill_sim.py` | shadow fill simulator + net-PnL estimate (reward markets) |
+| `tools/fill_sim.py` | shadow fill simulator + net-PnL estimate (reward markets) — run during active game windows |
 | `tools/hedge_arb_test.py` | live paper test for buy/sell-both free-arb (proves no taker free lunch) |
-| `tools/verify_eip712.py` | reconcile the v2 EIP-712 typehash/domain on-chain (resolve the neg-risk name) |
+| `tools/verify_eip712.py` | reconcile the v2 EIP-712 typehash/domain on-chain (needs authenticated Polygon RPC; all public RPCs blocked from EC2) |
+| `tools/measure_latency.py` | measure TCP-connect + TLS + TTFB RTT from this box to Polymarket (30-sample curl); run from the EC2 to get real numbers |
 | `tools/profile_run.py` | 5-min `/proc` sampler (mem, per-core CPU, ctxt-switches, net) → `analysis/profile_plots.py` |
 
 All gamma/CLOB calls need a `User-Agent` header (else 403).
@@ -634,10 +708,14 @@ category. **✅ done in-repo · ⚠️ open · 🔒 gated on compliance.**
   up (`reward_refresh_seconds`, applied via a single-writer SPSC ring, no hot-path lock).
 
 **Spec**
-- ⚠️ **v2 EIP-712 UNVERIFIED on-chain** — run `python3 tools/verify_eip712.py --rpc
-  <your Polygon RPC>` to reconcile `ORDER_TYPEHASH` + domain separators against the
-  deployed Exchange and resolve the neg-risk domain `name` (A vs B). The offline
-  cross-check (independent Python keccak vs the C++/OpenSSL path) already matches.
+- ⚠️ **v2 EIP-712 UNVERIFIED on-chain** — `ORDER_TYPEHASH` and domain separators
+  verified offline (Python keccak == C++/OpenSSL; matches `eip712.hpp`). The
+  on-chain check is blocked: all tested public Polygon RPCs fail from the EC2
+  (polygon-rpc.com: 401; ankr: rate-limited; publicnode: 403). Needs an
+  **authenticated Polygon RPC** (Alchemy/Infura free tier). Run:
+  `python3 tools/verify_eip712.py --rpc https://polygon-mainnet.g.alchemy.com/v2/<KEY>`
+  to resolve the open neg-risk domain `name` question (two candidates differ).
+  **Do not sign any order until this passes.**
 - ⚠️ v2 fee formula unvalidated (captured `fee_rate_bps` were 0).
 
 **Latency / infra**
@@ -656,25 +734,29 @@ category. **✅ done in-repo · ⚠️ open · 🔒 gated on compliance.**
 
 ## Roadmap
 
-1. **Run the quote-telemetry capture for hours/days** (now built —
-   `quote_telemetry.csv`) and fold it into `fill_sim.py` offline replay → a
-   trustworthy net-of-adverse-selection number. *(Zero risk; do first.)* This is
-   **the** number that decides whether the true-LP shift makes money.
-2. **Pick the region empirically, then deploy.** Polymarket designates **eu-west-1
-   (Ireland) as the closest *unrestricted* region** (engine in eu-west-2, geo-
-   restricted). On AWS, eu-west-1 likely beats Amsterdam via AWS's backbone to
-   eu-west-2 — but A/B candidates on `cf-ray` PoP + warm TCP-connect RTT before
-   committing (run chrony/PTP; trust round-trip, not one-way). The bigger lever is
-   **KYB colocation in eu-west-2** (sub-ms, direct, sub-Cloudflare) — gated by
-   compliance, and likely overkill for a rewards-LP.
-3. **Reconcile the v2 EIP-712 spec on-chain** (resolve the neg-risk domain `name`;
-   confirm `ORDER_TYPEHASH` + domain separators against the deployed Exchange).
+1. **Run the bot during active game windows** to measure game-time adversity —
+   the number the go/no-go decision hinges on. `quote_telemetry.csv` captures
+   mid-vol spikes and ACR at-risk events in real time. Complement with
+   `python3 tools/fill_sim.py 3600 config.live_ireland.json` during a match.
+   *(Quiet inter-game windows show 0 fills and 0 adversity — don't conclude from
+   those. The question is what happens when Spain scores.)*
+2. ✅ **Ireland EC2 deployed and measured.** TCP-connect min 1.40 ms to CF-DUB,
+   feed delivery p50 9.4 ms, in-process p50 2.4 µs, 0 involuntary ctx-switches.
+   The bigger lever — **KYB colocation in eu-west-2** (sub-ms, sub-Cloudflare,
+   direct to engine) — is gated on compliance and worthwhile at $50k+ scale.
+3. **Reconcile the v2 EIP-712 spec on-chain** — get an authenticated Polygon RPC
+   (Alchemy free tier) and run `tools/verify_eip712.py`. Offline checks pass;
+   on-chain is blocked from the EC2 via public RPCs. Resolves the neg-risk domain
+   `name` open question. **Required before any order can be signed.**
 4. Validate the v2 fee formula against a non-zero `last_trade_price.fee_rate_bps`.
-5. Live execution milestone (only after clearance) — add ECDSA signing over the
-   MockLive digest + L2 auth + allowances; see above.
-6. Host µs-stack (kernel bypass / busy-poll / CPU isolation / ENA / placement
-   groups) — **only material if you colocate**; noise vs the ms network while
-   remote. Defer until colocated and only if profiling says host time matters.
+5. Live execution milestone (only after compliance + EIP-712 verified) — add ECDSA
+   signing over the MockLive digest + L2 auth + allowances; see above.
+6. Start with **Fed Rate Hike** for the first live capital test (non-neg-risk,
+   verifiable EIP-712 domain, $300/day pool, $200 collateral, low adversity risk
+   vs sudden game events). Fold in World Cup markets after seeing actual fill data.
+7. Host µs-stack (kernel bypass / busy-poll / ENA) — **only material if you
+   colocate**; noise vs the ms network while remote. ✅ Already done: isolcpus,
+   nosmt, THP=never, SCHED_FIFO; p99 4.7 µs on the EC2.
 
 ### Runbook — host tuning (ONLY once colocated; noise while remote)
 All of this is **p99-jitter (tail) polish that saves microseconds** — it is *noise*
@@ -703,25 +785,24 @@ against the ms network until you colocate, so do it last. Sourced from the canon
 (governor, C-states, THP, IRQ steering, sysctls, rt/mlock limits, and the GRUB
 isolcpus/nohz_full line).
 
-### Profiling (measured, 2026-06) — what the host actually does
+### Profiling (2026-06, dev box → Ireland EC2) — what the host actually does
 
-A 5-min live capture (`tools/profile_run.py` → `analysis/profile_plots.py`; 5,576
-frames + 1,495 system samples) on the dev box:
+**Dev box (un-isolated cores):** e2e p50 3.0 µs, p99.9 57 µs / max 388 µs.
+Worst tail came from **9.1/s involuntary context switches** preempting busy-poll
+threads. `isolcpus`+`nohz_full` is the fix — removes preemptions that literally
+are the p99.9 tail.
 
-- **In-process is excellent:** e2e **p50 3.0 µs** (queue 1.1 + parse 1.8 + book
-  **0.02**), **no memory leak** (RSS flat ~51 MB), book-update near-free (bitmap).
-- **The whole tail is preemption, not code:** e2e p99.9 **57 µs** / max 388 µs — the
-  worst *steady-state* frames are small 620-byte frames that took 30–100 µs **in
-  parse**, coinciding with **9.1/s involuntary context switches** (the OS preempting
-  the busy-poll threads on **un-isolated** cores; voluntary switches = 0). So
-  `isolcpus`+`nohz_full` is the *measured* fix — it removes the preemptions that
-  literally are the p99.9 tail. simdjson isn't the bottleneck; the scheduler is.
-- **Busy-poll burns ~2 cores** (parser core 4 + sender, both ~100%) by design. The
-  sender spins a full core for ~12 events in 5 min — on a small/shared box set
-  **`sender_park_after_idle_us`** >0 to park it when idle (0 = pure spin on a
-  dedicated isolated core).
+**Ireland EC2 c7i.4xlarge (measured 2026-06-25, 6 markets, 25-min run):**
+- e2e **p50 2.4 µs**, **p99 7.3 µs**, p99.9 ~34 µs — involuntary ctx-switches **0/s**
+- RSS **~92 MB locked** (`lock_memory:true` makes all reserved rings+stacks resident)
+- Feed delivery p50 **9.4 ms**, min 7.8 ms — this is the geography number
+- Throttle suppressed **73% of reconciles** — queue-priority preservation working
+- 62,316 eligible reward quotes, 30 EIP-712 digests, 0 near-miss violations
 
-Re-run any time: `python3 tools/profile_run.py --duration 300 && python3 analysis/profile_plots.py`.
+The p99.9 residual (~34 µs) is large-frame parse (initial book dumps), not jitter.
+Irrelevant vs the ms network.
+
+Re-run any time: `python3 tools/profile_run.py --config config.live_ireland.json --duration 300 && python3 analysis/profile_plots.py`.
 
 ---
 
