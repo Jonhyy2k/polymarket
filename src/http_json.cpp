@@ -146,6 +146,71 @@ struct HttpsSession::Impl {
         return false;
     }
 
+    // Generic verb request with a body + caller-supplied headers. Mirrors get()'s
+    // warm-socket reuse and one-retry-on-broken-pipe, but returns the HTTP status
+    // (non-2xx is not an error) so the caller can read a CLOB JSON error body.
+    bool request(std::string_view method, std::string_view target,
+                 std::string_view body, const HttpHeaders& extra_headers,
+                 HttpResponse& resp, std::string& error,
+                 std::string_view content_type, double* request_ms) {
+        const http::verb verb = http::string_to_verb(std::string(method));
+        if (verb == http::verb::unknown) {
+            error = "Unknown HTTP method: " + std::string(method);
+            return false;
+        }
+        for (int attempt = 0; attempt < 2; ++attempt) {
+            if (!connected && !connect(error)) {
+                return false;
+            }
+            try {
+                const auto t0 = std::chrono::steady_clock::now();
+                beast::get_lowest_layer(*stream).expires_after(std::chrono::seconds(15));
+
+                http::request<http::string_body> req{verb, std::string(target), 11};
+                req.set(http::field::host, host);
+                req.set(http::field::user_agent, "polymarket-https-session/0.1");
+                req.set(http::field::accept, "application/json");
+                for (const auto& h : extra_headers) {
+                    req.set(h.first, h.second);
+                }
+                if (!body.empty()) {
+                    req.set(http::field::content_type, std::string(content_type));
+                    req.body().assign(body.begin(), body.end());
+                }
+                req.keep_alive(true);
+                req.prepare_payload();   // sets Content-Length (and zero-len for empty)
+
+                http::write(*stream, req);
+
+                beast::flat_buffer buffer;
+                http::response<http::string_body> res;
+                http::read(*stream, buffer, res);
+
+                const auto t1 = std::chrono::steady_clock::now();
+                const double elapsed = elapsed_ms(t0, t1);
+                ++metrics.request_count;
+                metrics.request_ms_total += elapsed;
+                if (elapsed > metrics.max_request_ms) metrics.max_request_ms = elapsed;
+                if (request_ms) *request_ms = elapsed;
+
+                resp.status = res.result_int();
+                resp.body   = std::move(res.body());
+                metrics.bytes_received += resp.body.size();
+
+                if (!res.keep_alive()) close_silently();
+                return true;
+            } catch (const std::exception& ex) {
+                error = ex.what();
+                close_silently();
+                ++metrics.retry_count;
+                if (attempt == 0) continue;   // broken keep-alive: reconnect once
+                return false;
+            }
+        }
+        error = "Unreachable";
+        return false;
+    }
+
     std::string host;
     std::string port;
     net::io_context ioc;
@@ -164,6 +229,14 @@ HttpsSession::~HttpsSession() = default;
 bool HttpsSession::get(std::string_view target, std::string& body, std::string& error,
                        double* request_ms) {
     return impl_->get(target, body, error, request_ms);
+}
+
+bool HttpsSession::request(std::string_view method, std::string_view target,
+                           std::string_view body, const HttpHeaders& extra_headers,
+                           HttpResponse& resp, std::string& error,
+                           std::string_view content_type, double* request_ms) {
+    return impl_->request(method, target, body, extra_headers, resp, error,
+                          content_type, request_ms);
 }
 
 const HttpsSessionMetrics& HttpsSession::metrics() const noexcept {

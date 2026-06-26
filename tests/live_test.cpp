@@ -9,6 +9,8 @@
 #include "rewards.hpp"
 #include "acr.hpp"
 #include "oms.hpp"
+#include "clob_auth.hpp"
+#include "fill_parser.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -200,6 +202,66 @@ int main() {
         oms.set_kill_switch(false);            // feed resumed
         oms.reconcile("T", q);
         CHECK(oms.open_order_count() == 2, "dms: re-enabled after the switch clears");
+    }
+
+    // ---- CLOB L2 auth: HMAC-SHA256 + base64url vs a Python reference vector ----
+    {
+        // base64url("0123456789abcdef0123456789abcdef")
+        const std::string secret = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=";
+        const std::string msg = clob::l2_message(1700000000, "POST", "/order", "{\"x\":1}");
+        CHECK(msg == "1700000000POST/order{\"x\":1}", "l2_message concatenates ts+method+path+body");
+        const std::string sig = clob::hmac_sha256_b64url(secret, msg);
+        // reference computed with python hmac/base64.urlsafe_b64encode
+        CHECK(sig == "2t4TPZwjv6fDsCqe3ug1x5NQWmGEc82naGXsZQIdsWE=",
+              "L2 HMAC-SHA256 base64url matches reference vector");
+
+        // base64url round-trips arbitrary bytes (incl. values that map to -/_)
+        const unsigned char raw[3] = {0xfb, 0xff, 0xbf};  // -> "-_-/" family
+        std::string enc = clob::detail::b64_encode(raw, 3, true);
+        auto dec = clob::detail::b64_decode(enc);
+        CHECK(dec.size() == 3 && dec[0] == 0xfb && dec[1] == 0xff && dec[2] == 0xbf,
+              "base64url encode/decode round-trips");
+
+        clob::L2Creds c{"key-1", secret, "pass-1", "0xabc"};
+        auto hdrs = clob::build_l2_headers(c, 1700000000, "POST", "/order", "{\"x\":1}");
+        bool has_sig = false, has_key = false, has_ts = false, has_addr = false, has_pass = false;
+        for (auto& h : hdrs) {
+            if (h.first == "POLY_SIGNATURE")  has_sig  = (h.second == sig);
+            if (h.first == "POLY_API_KEY")    has_key  = (h.second == "key-1");
+            if (h.first == "POLY_TIMESTAMP")  has_ts   = (h.second == "1700000000");
+            if (h.first == "POLY_ADDRESS")    has_addr = (h.second == "0xabc");
+            if (h.first == "POLY_PASSPHRASE") has_pass = (h.second == "pass-1");
+        }
+        CHECK(hdrs.size() == 5 && has_sig && has_key && has_ts && has_addr && has_pass,
+              "build_l2_headers emits all five POLY_* headers correctly");
+    }
+
+    // ---- fill parser: user-channel message -> FillEvent (string + numeric amounts) ----
+    {
+        // size_matched as a STRING (Polymarket commonly stringifies amounts)
+        const std::string m1 =
+            "{\"event_type\":\"order\",\"asset_id\":\"123456789\","
+            "\"id\":\"0xdeadbeef\",\"status\":\"MATCHED\",\"side\":\"BUY\","
+            "\"size_matched\":\"150\"}";
+        live::FillEvent e1 = live::parse_user_message(m1);
+        CHECK(e1.valid && e1.event_type == "order", "fill: order update recognized");
+        CHECK(e1.asset_id == "123456789" && e1.exchange_order_id == "0xdeadbeef",
+              "fill: asset_id + exchange order id extracted");
+        CHECK(e1.size_matched == 150 && e1.status == "MATCHED" && e1.side == "BUY",
+              "fill: string size_matched parsed to 150");
+
+        // size_matched as a NUMBER
+        const std::string m2 =
+            "{\"event_type\":\"trade\",\"asset_id\":\"987\",\"size_matched\":42}";
+        live::FillEvent e2 = live::parse_user_message(m2);
+        CHECK(e2.valid && e2.size_matched == 42, "fill: numeric size_matched parsed to 42");
+
+        // unrelated message -> not a fill
+        const std::string m3 = "{\"event_type\":\"book\",\"asset_id\":\"1\"}";
+        CHECK(!live::parse_user_message(m3).valid, "fill: non-order/trade message ignored");
+
+        // malformed JSON -> safe, invalid
+        CHECK(!live::parse_user_message("{not json").valid, "fill: malformed json is safe");
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "ALL PASS" : "FAILURES PRESENT");

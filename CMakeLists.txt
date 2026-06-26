@@ -136,7 +136,7 @@ add_executable(live_test
 )
 target_include_directories(live_test PRIVATE src deps)
 target_compile_options(live_test PRIVATE -O2)
-target_link_libraries(live_test OpenSSL::Crypto pthread)
+target_link_libraries(live_test simdjson OpenSSL::Crypto pthread)
 
 target_link_libraries(arb_detector
     simdjson

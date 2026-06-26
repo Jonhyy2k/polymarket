@@ -4,6 +4,8 @@
 #include <memory>
 #include <string>
 #include <string_view>
+#include <utility>
+#include <vector>
 
 struct HttpsSessionMetrics {
     uint64_t connect_count = 0;
@@ -27,6 +29,17 @@ inline void accumulate_metrics(HttpsSessionMetrics& dst, const HttpsSessionMetri
     }
 }
 
+// One extra request header (name,value), e.g. an L2 auth header.
+using HttpHeader  = std::pair<std::string, std::string>;
+using HttpHeaders = std::vector<HttpHeader>;
+
+// Result of a generic request. Unlike get(), a non-2xx is NOT an error here —
+// the caller inspects `status` (e.g. a 400 from the CLOB with a JSON error body).
+struct HttpResponse {
+    int         status = 0;   // HTTP status code (0 if no response received)
+    std::string body;
+};
+
 class HttpsSession {
 public:
     explicit HttpsSession(std::string host, std::string port = "443");
@@ -34,6 +47,20 @@ public:
 
     bool get(std::string_view target, std::string& body, std::string& error,
              double* request_ms = nullptr);
+
+    // Generic verb request over the same warm keep-alive + TLS1.3 + NODELAY socket.
+    // method: "GET" | "POST" | "DELETE" | "PUT". `body` may be empty.
+    // `extra_headers` are added verbatim (Host/User-Agent/Content-Length are set
+    // automatically). Returns true if a response arrived (then inspect resp.status);
+    // returns false only on a transport/connection error (sets `error`).
+    //
+    // NOTE: this is pure transport. It signs nothing and holds no keys — auth
+    // headers, if any, are built by the caller (see clob_auth.hpp) and passed in.
+    bool request(std::string_view method, std::string_view target,
+                 std::string_view body, const HttpHeaders& extra_headers,
+                 HttpResponse& resp, std::string& error,
+                 std::string_view content_type = "application/json",
+                 double* request_ms = nullptr);
 
     const HttpsSessionMetrics& metrics() const noexcept;
 
