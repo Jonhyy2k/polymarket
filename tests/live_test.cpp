@@ -11,6 +11,7 @@
 #include "oms.hpp"
 #include "clob_auth.hpp"
 #include "fill_parser.hpp"
+#include "eip712_sign.hpp"
 
 #include <cstdio>
 #include <cstring>
@@ -262,6 +263,53 @@ int main() {
 
         // malformed JSON -> safe, invalid
         CHECK(!live::parse_user_message("{not json").valid, "fill: malformed json is safe");
+    }
+
+    // ---- secp256k1 EIP-712 signing: byte-for-byte vs eth_account (RFC6979) ----
+    // Reference vectors generated with eth_account 0.13.7 (Account.unsafe_sign_hash).
+    // Throwaway test keys only — never real custody.
+    {
+        using namespace eip712;
+        const std::string k1 = "0x0000000000000000000000000000000000000000000000000000000000000001";
+        const std::string k2 = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d";
+        const Bytes32 d_ones = word_hex("0x1111111111111111111111111111111111111111111111111111111111111111");
+        const Bytes32 d_dead = word_hex("0xdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef");
+
+        // address derivation (key=1 is the canonical vector)
+        CHECK(address_from_privkey_hex(k1) == "0x7e5f4552091a69125d5dfcb7b8c2659029395bdf",
+              "sign: address(privkey=1) matches canonical vector");
+        CHECK(address_from_privkey_hex(k2) == "0x90f8bf6a479f320ead074411a4b0e7944ea8c9c1",
+              "sign: address(privkey=k2) matches eth_account");
+
+        Sig65 s{};
+        CHECK(sign_digest_hex(d_ones, k1, s) &&
+              sig_to_hex(s) == "0xe7c93726a865578504442b1a6827f676e0ed74bdff2be3960d1e253bbcfc4462"
+                               "6aa772b878bc912bdbb33a0014ec507c4b3896ea85aa914b74dee9b7ac3e56da1c",
+              "sign: k1/digest(0x11..) == eth_account (v=28)");
+        CHECK(sign_digest_hex(d_dead, k1, s) &&
+              sig_to_hex(s) == "0xfc734c415fbca1ee1650c1e4abc3b3848db40632b605c51c66eb0d3e2bed4858"
+                               "6e42c65f430cfb3e3923cc024db9355738b6f878c70b6af2d76cd2d6e0a7cddf1b",
+              "sign: k1/digest(0xdead..) == eth_account (v=27)");
+        CHECK(sign_digest_hex(d_ones, k2, s) &&
+              sig_to_hex(s) == "0x039d27b1425e8070c058e36f7f395f5f856998d14337e6b83c08b8b18ecc83bd"
+                               "10c1c048ada88ac1b3314836a532c0cda0319c2a3cc6fdf64b5e963bfc19df6a1b",
+              "sign: k2/digest(0x11..) == eth_account (v=27)");
+        CHECK(sign_digest_hex(d_dead, k2, s) &&
+              sig_to_hex(s) == "0xcb2d3062e0b4d0fa947edc06f9c0bc8d872ff8b05a82ac609eae1136fe4418fa"
+                               "2986653ea1d5cbb9596032b6d27c02db0c89653e56cdf91d24e08c35410ba64d1b",
+              "sign: k2/digest(0xdead..) == eth_account (v=27)");
+
+        // low-s canonical: s must be <= n/2 (EIP-2). Top byte of s (out[32]) < 0x80
+        // is a necessary check; eth_account vectors above already encode low-s.
+        CHECK((s[32] & 0x80) == 0, "sign: s is low-s (canonical, EIP-2)");
+
+        // end-to-end: sign a REAL order's EIP-712 digest, recover address == signer
+        live::SignerConfig cfg;
+        cfg.maker = cfg.signer = address_from_privkey_hex(k1);
+        const auto p = live::make_payload(cfg, "123", true, 500, 200, 1, 1700000000000ull, false);
+        const Bytes32 od = live::digest(p);
+        Sig65 os{};
+        CHECK(sign_digest_hex(od, k1, os), "sign: real order digest signs without error");
     }
 
     std::printf("\n%s\n", g_failures == 0 ? "ALL PASS" : "FAILURES PRESENT");
