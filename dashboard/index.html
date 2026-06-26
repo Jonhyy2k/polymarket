@@ -3,407 +3,283 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Polymarket LP Dashboard</title>
-<script src="https://cdn.tailwindcss.com"></script>
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<title>PMKT LP TERMINAL</title>
 <style>
-  body { font-family: 'SF Mono', 'Fira Code', monospace; }
-  .blink { animation: blink 1.2s step-end infinite; }
-  @keyframes blink { 50% { opacity: 0; } }
-  .fade-in { animation: fadeIn 0.4s ease; }
-  @keyframes fadeIn { from { opacity: 0.4; } to { opacity: 1; } }
+  :root {
+    --bg:      #000000;
+    --panel:   #0a0a0a;
+    --line:    #1a1a1a;
+    --amber:   #ff9e1b;   /* headers / accent */
+    --amberdim:#7a5012;
+    --green:   #2ecc71;
+    --red:     #ff3b30;
+    --cyan:    #3fc1c9;
+    --txt:     #d6d6d6;
+    --dim:     #6a6a6a;
+    --dimmer:  #444444;
+    --white:   #f5f5f5;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg); color: var(--txt);
+    font-family: 'Consolas','SF Mono','DejaVu Sans Mono','Menlo',monospace;
+    font-size: 12px; line-height: 1.35;
+    -webkit-font-smoothing: none;
+  }
   .num { font-variant-numeric: tabular-nums; }
-  ::-webkit-scrollbar { width: 6px; }
-  ::-webkit-scrollbar-track { background: #111; }
-  ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+  .up   { color: var(--green); }
+  .down { color: var(--red); }
+  .flat { color: var(--dim); }
+  .amber{ color: var(--amber); }
+  .cyan { color: var(--cyan); }
+  .dim  { color: var(--dim); }
+  .white{ color: var(--white); }
+
+  /* ── Top bar ── */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    border-bottom: 1px solid var(--amberdim);
+    padding: 4px 10px; background: var(--panel);
+  }
+  .topbar .title { color: var(--amber); font-weight: bold; letter-spacing: 1px; }
+  .topbar .seg { color: var(--dim); margin-left: 16px; }
+  .topbar .seg b { color: var(--white); font-weight: normal; }
+  .dot { display:inline-block; width:7px; height:7px; border-radius:50%; vertical-align:middle; }
+  .dot.on  { background: var(--green); box-shadow: 0 0 4px var(--green); }
+  .dot.off { background: var(--red); animation: blink 1s step-end infinite; }
+  @keyframes blink { 50% { opacity: .25; } }
+  .badge { padding: 1px 6px; border: 1px solid var(--amberdim); color: var(--amber); }
+  .badge.live { border-color: var(--green); color: var(--green); }
+
+  /* ── Layout ── */
+  .wrap { padding: 0; }
+  .section-hdr {
+    color: var(--amber); background: var(--panel);
+    padding: 3px 10px; border-bottom: 1px solid var(--line);
+    border-top: 1px solid var(--line);
+    font-weight: bold; letter-spacing: 1px; text-transform: uppercase;
+    display: flex; justify-content: space-between;
+  }
+  .section-hdr .sub { color: var(--dim); font-weight: normal; letter-spacing: 0; }
+
+  /* ── Table ── */
+  table { width: 100%; border-collapse: collapse; }
+  thead th {
+    color: var(--dim); text-align: right; font-weight: normal;
+    padding: 3px 10px; border-bottom: 1px solid var(--line);
+    text-transform: uppercase; font-size: 11px; letter-spacing: .5px;
+    white-space: nowrap; background: var(--bg);
+  }
+  thead th.l { text-align: left; }
+  tbody td {
+    text-align: right; padding: 2px 10px; white-space: nowrap;
+    border-bottom: 1px solid #0e0e0e;
+  }
+  tbody td.l { text-align: left; }
+  tbody tr:hover { background: #0d0d0d; }
+
+  /* ── Risk grid ── */
+  .riskgrid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 0;
+  }
+  .riskcell {
+    border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    padding: 6px 10px;
+  }
+  .riskcell .lbl { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing:.5px; }
+  .riskcell .val { font-size: 17px; margin-top: 2px; }
+  .riskcell .sub { color: var(--dimmer); font-size: 10px; margin-top: 1px; }
+
+  .kv { display:flex; justify-content:space-between; padding: 2px 10px; border-bottom:1px solid #0e0e0e; }
+  .kv .k { color: var(--dim); }
+
+  .foot { color: var(--dimmer); font-size: 10px; padding: 6px 10px; }
+  .blink-flash { animation: flash .6s ease; }
+  @keyframes flash { 0% { background:#1a1206; } 100% { background:transparent; } }
 </style>
 </head>
-<body class="bg-gray-950 text-gray-100 min-h-screen p-4">
+<body>
 
-<!-- ── Header ─────────────────────────────────────────────────────────────── -->
-<div class="flex items-center justify-between mb-6">
-  <div class="flex items-center gap-3">
-    <div class="text-emerald-400 text-2xl">◈</div>
-    <div>
-      <h1 class="text-lg font-bold text-white tracking-tight">Polymarket LP Dashboard</h1>
-      <p class="text-xs text-gray-500">Ireland EC2 · Reward Market Maker</p>
-    </div>
+<div class="topbar">
+  <div>
+    <span class="title">PMKT·LP TERMINAL</span>
+    <span class="seg">SITE <b>IE·eu-west-1</b></span>
+    <span class="seg">MODE <b id="mode" class="badge">—</b></span>
   </div>
-  <div class="flex items-center gap-4">
-    <div id="mode-badge" class="px-2 py-0.5 rounded text-xs font-bold bg-yellow-900 text-yellow-300">MOCKLIVE</div>
-    <div class="flex items-center gap-1.5">
-      <div id="ws-dot" class="w-2 h-2 rounded-full bg-red-500 blink"></div>
-      <span id="ws-label" class="text-xs text-gray-400">Connecting…</span>
-    </div>
-    <div class="text-xs text-gray-600 num" id="last-update">—</div>
+  <div>
+    <span class="seg">FEED <b id="t-feed">—</b></span>
+    <span class="seg">REST <b id="t-rest">—</b></span>
+    <span class="seg"><span id="t-dot" class="dot off"></span> <b id="t-link">CONNECTING</b></span>
+    <span class="seg num" id="t-clock">--:--:--</span>
   </div>
 </div>
 
-<!-- ── Key Metric Cards ────────────────────────────────────────────────────── -->
-<div class="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-5">
-  <div class="bg-gray-900 border border-gray-800 rounded-lg p-3">
-    <div class="text-xs text-gray-500 mb-1">Gross Notional AUM</div>
-    <div id="card-aum" class="text-xl font-bold text-white num">—</div>
-    <div class="text-xs text-gray-600 mt-0.5" id="card-aum-note">—</div>
-  </div>
-  <div class="bg-gray-900 border border-gray-800 rounded-lg p-3">
-    <div class="text-xs text-gray-500 mb-1">Est. Reward / Day</div>
-    <div id="card-reward" class="text-xl font-bold text-emerald-400 num">—</div>
-    <div class="text-xs text-gray-600 mt-0.5" id="card-pool">Total pool: —</div>
-  </div>
-  <div class="bg-gray-900 border border-gray-800 rounded-lg p-3">
-    <div class="text-xs text-gray-500 mb-1">Net Delta</div>
-    <div id="card-delta" class="text-xl font-bold text-white num">—</div>
-    <div class="text-xs text-gray-600 mt-0.5">directional $ exposure</div>
-  </div>
-  <div class="bg-gray-900 border border-gray-800 rounded-lg p-3">
-    <div class="text-xs text-gray-500 mb-1">Feed Latency</div>
-    <div id="card-latency" class="text-xl font-bold text-white num">—</div>
-    <div class="text-xs text-gray-600 mt-0.5" id="card-latency-note">—</div>
-  </div>
+<!-- ── Top KPI strip ── -->
+<div class="riskgrid" id="kpi">
+  <div class="riskcell"><div class="lbl">Gross Notional</div><div class="val white num" id="k-aum">—</div><div class="sub" id="k-aum-sub">—</div></div>
+  <div class="riskcell"><div class="lbl">Est Reward / Day</div><div class="val up num" id="k-rew">—</div><div class="sub" id="k-pool">—</div></div>
+  <div class="riskcell"><div class="lbl">Net Delta $</div><div class="val num" id="k-delta">—</div><div class="sub">directional exposure</div></div>
+  <div class="riskcell"><div class="lbl">Max Loss</div><div class="val down num" id="k-maxloss">—</div><div class="sub">all positions → 0</div></div>
+  <div class="riskcell"><div class="lbl">VaR 95% 1d</div><div class="val amber num" id="k-var">—</div><div class="sub" id="k-var-sub">—</div></div>
+  <div class="riskcell"><div class="lbl">Markets Live</div><div class="val cyan num" id="k-mkts">—</div><div class="sub" id="k-elig">—</div></div>
 </div>
 
-<!-- ── Markets Table ───────────────────────────────────────────────────────── -->
-<div class="bg-gray-900 border border-gray-800 rounded-lg mb-5 overflow-x-auto">
-  <div class="px-4 pt-3 pb-2 flex items-center justify-between">
-    <h2 class="text-sm font-semibold text-gray-300">Live Markets</h2>
-    <span class="text-xs text-gray-600" id="markets-ts">—</span>
-  </div>
-  <table class="w-full text-xs">
-    <thead>
-      <tr class="text-gray-500 border-b border-gray-800">
-        <th class="text-left px-4 py-2">Market</th>
-        <th class="text-right px-3 py-2">YES mid</th>
-        <th class="text-right px-3 py-2">NO mid</th>
-        <th class="text-right px-3 py-2">Our bid</th>
-        <th class="text-right px-3 py-2">Our ask</th>
-        <th class="text-right px-3 py-2">Qmin</th>
-        <th class="text-right px-3 py-2">Pool/day</th>
-        <th class="text-right px-3 py-2">Est.Rew</th>
-        <th class="text-right px-3 py-2">Net Pos</th>
-        <th class="text-center px-3 py-2">Status</th>
-      </tr>
-    </thead>
-    <tbody id="markets-tbody">
-      <tr><td colspan="10" class="text-center py-8 text-gray-600">Waiting for data…</td></tr>
-    </tbody>
-  </table>
+<!-- ── Markets ── -->
+<div class="section-hdr">MARKETS <span class="sub" id="m-ts">—</span></div>
+<table>
+  <thead>
+    <tr>
+      <th class="l">MARKET</th>
+      <th>YES</th>
+      <th>Δ SESS</th>
+      <th>HI</th>
+      <th>LO</th>
+      <th>NO</th>
+      <th>BID</th>
+      <th>ASK</th>
+      <th>SPR</th>
+      <th>QMIN</th>
+      <th>POOL/D</th>
+      <th>EST·R</th>
+      <th>POS</th>
+      <th>ST</th>
+    </tr>
+  </thead>
+  <tbody id="mtbody">
+    <tr><td colspan="14" class="l dim" style="padding:14px 10px">awaiting feed…</td></tr>
+  </tbody>
+</table>
+
+<!-- ── Risk ── -->
+<div class="section-hdr">PORTFOLIO RISK <span class="sub">binary-outcome stress models</span></div>
+<div class="riskgrid">
+  <div class="riskcell"><div class="lbl">Goal Scored</div><div class="val amber num" id="s-goal">—</div><div class="sub">single +20¢ YES spike</div></div>
+  <div class="riskcell"><div class="lbl">All Eliminated</div><div class="val amber num" id="s-out">—</div><div class="sub">every YES → $0</div></div>
+  <div class="riskcell"><div class="lbl">One Team Wins</div><div class="val amber num" id="s-win">—</div><div class="sub">a YES → $1</div></div>
+  <div class="riskcell"><div class="lbl">Concentration</div><div class="val white num" id="s-conc">—</div><div class="sub" id="s-conc-sub">top market</div></div>
+  <div class="riskcell"><div class="lbl">Net Delta</div><div class="val num" id="s-delta">—</div><div class="sub">$ / 1.00 move</div></div>
+  <div class="riskcell"><div class="lbl">Total Est Reward</div><div class="val up num" id="s-rew">—</div><div class="sub">/ day @ assumed share</div></div>
 </div>
 
-<!-- ── Risk Panel + Chart ──────────────────────────────────────────────────── -->
-<div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-5">
-
-  <!-- Risk Metrics -->
-  <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
-    <h2 class="text-sm font-semibold text-gray-300 mb-3">Portfolio Risk</h2>
-    <div class="space-y-2">
-      <div class="flex justify-between text-xs">
-        <span class="text-gray-500">Gross Notional</span>
-        <span id="risk-notional" class="num font-mono text-white">—</span>
-      </div>
-      <div class="flex justify-between text-xs">
-        <span class="text-gray-500">Net Delta</span>
-        <span id="risk-delta" class="num font-mono text-white">—</span>
-      </div>
-      <div class="border-t border-gray-800 my-2"></div>
-      <div class="text-xs text-gray-600 uppercase tracking-wide mb-1">Tail Risk</div>
-      <div class="flex justify-between text-xs">
-        <span class="text-gray-500">Max Loss (all positions → 0)</span>
-        <span id="risk-maxloss" class="num font-mono text-red-400">—</span>
-      </div>
-      <div class="flex justify-between text-xs">
-        <span class="text-gray-500">VaR 95% 1-day</span>
-        <span id="risk-var" class="num font-mono text-orange-400">—</span>
-      </div>
-      <div class="border-t border-gray-800 my-2"></div>
-      <div class="text-xs text-gray-600 uppercase tracking-wide mb-1">Stress Tests</div>
-      <div class="flex justify-between text-xs">
-        <span class="text-gray-500">Goal scored (single +20¢ YES spike)</span>
-        <span id="risk-stress-goal" class="num font-mono text-yellow-400">—</span>
-      </div>
-      <div class="flex justify-between text-xs">
-        <span class="text-gray-500">All teams eliminated (YES → $0)</span>
-        <span id="risk-stress-out" class="num font-mono text-yellow-400">—</span>
-      </div>
-      <div class="flex justify-between text-xs">
-        <span class="text-gray-500">One team wins WC (YES → $1)</span>
-        <span id="risk-stress-win" class="num font-mono text-yellow-400">—</span>
-      </div>
-      <div class="border-t border-gray-800 my-2"></div>
-      <div class="text-xs text-gray-600 uppercase tracking-wide mb-1">Reward Estimate</div>
-      <div id="reward-breakdown" class="space-y-1"></div>
-      <div class="flex justify-between text-xs mt-1 pt-1 border-t border-gray-800">
-        <span class="text-gray-400 font-semibold">Total Est. Reward/day</span>
-        <span id="risk-total-reward" class="num font-mono text-emerald-400 font-semibold">—</span>
-      </div>
-      <div class="text-xs text-gray-600 mt-1" id="risk-var-note"></div>
-    </div>
-  </div>
-
-  <!-- Concentration + Price Chart -->
-  <div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
-    <h2 class="text-sm font-semibold text-gray-300 mb-3">Concentration & YES Prices</h2>
-    <div id="concentration" class="space-y-2 mb-4"></div>
-    <div class="border-t border-gray-800 pt-3">
-      <div class="text-xs text-gray-500 mb-2">YES Price History (REST, last 60 obs)</div>
-      <canvas id="price-chart" height="140"></canvas>
-    </div>
-  </div>
+<!-- ── System ── -->
+<div class="section-hdr">SYSTEM</div>
+<div class="riskgrid">
+  <div class="riskcell"><div class="lbl">Bot Process</div><div class="val num" id="y-bot" style="font-size:14px">—</div><div class="sub" id="y-bot-sub">&nbsp;</div></div>
+  <div class="riskcell"><div class="lbl">Feed p50 / p99</div><div class="val white num" id="y-feed" style="font-size:14px">—</div><div class="sub">ws delivery</div></div>
+  <div class="riskcell"><div class="lbl">Telemetry Rows</div><div class="val white num" id="y-tel" style="font-size:14px">—</div><div class="sub">quote samples</div></div>
+  <div class="riskcell"><div class="lbl">Reconnects / Rate</div><div class="val white num" id="y-conn" style="font-size:14px">—</div><div class="sub">session</div></div>
 </div>
 
-<!-- ── System Health ───────────────────────────────────────────────────────── -->
-<div class="bg-gray-900 border border-gray-800 rounded-lg p-4">
-  <h2 class="text-sm font-semibold text-gray-300 mb-3">System Health</h2>
-  <div class="grid grid-cols-2 sm:grid-cols-4 gap-4">
-    <div>
-      <div class="text-xs text-gray-500 mb-1">Bot Process</div>
-      <div id="sys-bot" class="text-sm font-mono">—</div>
-    </div>
-    <div>
-      <div class="text-xs text-gray-500 mb-1">Feed Delivery p50 / p99</div>
-      <div id="sys-feed" class="text-sm font-mono text-white num">—</div>
-    </div>
-    <div>
-      <div class="text-xs text-gray-500 mb-1">Telemetry Rows</div>
-      <div id="sys-tel" class="text-sm font-mono text-white num">—</div>
-    </div>
-    <div>
-      <div class="text-xs text-gray-500 mb-1">Reconnects / Msg/s</div>
-      <div id="sys-conn" class="text-sm font-mono text-white num">—</div>
-    </div>
-  </div>
+<div class="foot" id="foot">
+  MOCKLIVE — gross notional hypothetical (no orders placed), P&L $0 until exec_mode=live.
+  Est rewards assume 1% field Qmin share (conservative, unverified). Δ/HI/LO are since dashboard start.
 </div>
 
-<div class="mt-4 text-center text-xs text-gray-700">
-  ⚠ Gross notional in MOCKLIVE mode is hypothetical (no orders placed). P&L = $0 until live mode.
-  Est. rewards assume 1% market share (unverified — conservative).
-</div>
-
-<!-- ── Chart + WS Logic ───────────────────────────────────────────────────── -->
 <script>
-const COLORS = [
-  '#34d399','#60a5fa','#f472b6','#fbbf24','#a78bfa','#fb923c'
-];
+const COL = ['#ff9e1b','#3fc1c9','#2ecc71','#b388ff','#ff6e9c','#9aa0a6'];
+function fc(v){ if(v==null) return '—'; return (v*100).toFixed(1)+'¢'; }
+function fd(v,d=2){ if(v==null) return '—'; return '$'+Number(v).toFixed(d); }
+function sgn(v){ return v>0?'+':''; }
+function cls(v){ return v>0?'up':v<0?'down':'flat'; }
+const prev = {};
 
-// Price chart
-const chartCtx = document.getElementById('price-chart').getContext('2d');
-const priceChart = new Chart(chartCtx, {
-  type: 'line',
-  data: { labels: [], datasets: [] },
-  options: {
-    animation: false,
-    responsive: true,
-    plugins: { legend: { labels: { color: '#9ca3af', font: { size: 10, family: 'monospace' } } } },
-    scales: {
-      x: { display: false },
-      y: {
-        ticks: { color: '#6b7280', font: { size: 10 }, callback: v => (v*100).toFixed(1)+'¢' },
-        grid: { color: '#1f2937' }
-      }
-    }
-  }
-});
+function render(d){
+  document.getElementById('t-clock').textContent = new Date(d.ts).toLocaleTimeString('en-GB');
+  const mode = document.getElementById('mode');
+  mode.textContent = (d.exec_mode||'—').toUpperCase();
+  mode.className = 'badge' + (d.exec_mode==='live'?' live':'');
 
-// Price history per market (client-side ring buffer)
-const priceHistory = {};
+  document.getElementById('t-feed').textContent = d.feed_p50_ms!=null ? d.feed_p50_ms.toFixed(1)+'ms' : 'off';
+  document.getElementById('t-rest').innerHTML = d.rest_ok ? '<span class="up">OK</span>' : '<span class="down">DOWN</span>';
 
-function fmt$(v, digits=2) {
-  if (v == null) return '—';
-  return '$' + Number(v).toFixed(digits);
-}
-function fmtPct(v) {
-  if (v == null) return '—';
-  return (v*100).toFixed(1) + '¢';
-}
-function clr(v, pos='text-emerald-400', neg='text-red-400') {
-  if (v == null) return 'text-gray-400';
-  return v >= 0 ? pos : neg;
-}
+  const r = d.risk||{};
+  document.getElementById('k-aum').textContent = fd(r.gross_notional);
+  document.getElementById('k-aum-sub').textContent = d.exec_mode==='live'?'real capital':'hypothetical';
+  document.getElementById('k-rew').textContent = fd(r.est_reward_day);
+  document.getElementById('k-pool').textContent = 'pool $'+(r.total_pool||0).toLocaleString()+'/d';
+  const kd = document.getElementById('k-delta');
+  kd.textContent = fd(r.net_delta); kd.className = 'val num '+cls(r.net_delta);
+  document.getElementById('k-maxloss').textContent = fd(r.max_loss);
+  document.getElementById('k-var').textContent = r.var_95_1day!=null?fd(r.var_95_1day):'—';
+  document.getElementById('k-var-sub').textContent = r.var_note || 'historical sim';
 
-function update(d) {
-  const ts = new Date(d.ts);
-  document.getElementById('last-update').textContent = ts.toLocaleTimeString();
+  const mkts = d.markets||[];
+  const live = mkts.filter(m=>m.yes_mid!=null).length;
+  const elig = mkts.filter(m=>m.yes_eligible&&m.no_eligible).length;
+  document.getElementById('k-mkts').textContent = live+'/'+mkts.length;
+  document.getElementById('k-elig').textContent = elig+' eligible';
 
-  // Mode badge
-  const modeBadge = document.getElementById('mode-badge');
-  modeBadge.textContent = (d.exec_mode||'').toUpperCase();
-  modeBadge.className = d.exec_mode === 'live'
-    ? 'px-2 py-0.5 rounded text-xs font-bold bg-emerald-900 text-emerald-300'
-    : 'px-2 py-0.5 rounded text-xs font-bold bg-yellow-900 text-yellow-300';
-
-  const r = d.risk || {};
-
-  // Cards
-  document.getElementById('card-aum').textContent = fmt$(r.gross_notional);
-  document.getElementById('card-aum-note').textContent =
-    d.exec_mode !== 'live' ? 'hypothetical (mocklive)' : 'real deployed capital';
-  document.getElementById('card-reward').textContent = fmt$(r.est_reward_day);
-  document.getElementById('card-pool').textContent = `Total pool: $${(r.total_pool||0).toLocaleString()}/day`;
-  const deltaEl = document.getElementById('card-delta');
-  deltaEl.textContent = fmt$(r.net_delta);
-  deltaEl.className = 'text-xl font-bold num ' + clr(r.net_delta);
-
-  const latEl = document.getElementById('card-latency');
-  if (d.feed_p50_ms != null) {
-    latEl.textContent = d.feed_p50_ms.toFixed(1) + 'ms';
-    document.getElementById('card-latency-note').textContent =
-      `p99: ${d.feed_p99_ms?.toFixed(1) ?? '—'}ms · feed delivery`;
-  } else {
-    latEl.textContent = '—';
-    document.getElementById('card-latency-note').textContent = 'bot not running';
-  }
-
-  // Markets table
-  document.getElementById('markets-ts').textContent = ts.toLocaleTimeString();
-  const tbody = document.getElementById('markets-tbody');
-  if (!d.markets || d.markets.length === 0) return;
-
-  const rows = d.markets.map((m, i) => {
-    const yp = m.yes_mid, np = m.no_mid;
-    const yq = m.yes_qmin, nq = m.no_qmin;
-    const yb = m.yes_bid, ya = m.yes_ask;
-    const status = m.yes_eligible && m.no_eligible ? '✅' : '⚠️';
-    const atRisk = m.yes_at_risk || m.no_at_risk;
-    const pos = (m.yes_net_pos||0) + (m.no_net_pos||0);
-    // Reward estimate: assume 1% field share
-    const qmk = yq || 186.9;
-    const est_r = (qmk / (qmk * 100 + qmk)) * m.pool;
-
-    // Track price history
-    if (!priceHistory[m.display]) priceHistory[m.display] = [];
-    if (yp != null) {
-      priceHistory[m.display].push(yp);
-      if (priceHistory[m.display].length > 60)
-        priceHistory[m.display].shift();
-    }
-
-    return `<tr class="border-b border-gray-800 hover:bg-gray-800/50 fade-in">
-      <td class="px-4 py-2 text-gray-200 whitespace-nowrap">
-        ${m.display}
-        ${m.neg_risk ? '<span class="ml-1 text-gray-600 text-xs">neg</span>' : ''}
-      </td>
-      <td class="px-3 py-2 text-right num text-cyan-300">${yp != null ? fmtPct(yp) : '—'}</td>
-      <td class="px-3 py-2 text-right num text-gray-400">${np != null ? fmtPct(np) : '—'}</td>
-      <td class="px-3 py-2 text-right num text-emerald-400">${yb != null ? fmtPct(yb) : '—'}</td>
-      <td class="px-3 py-2 text-right num text-red-400">${ya != null ? fmtPct(ya) : '—'}</td>
-      <td class="px-3 py-2 text-right num text-gray-300">${(yq||0).toFixed(1)}</td>
-      <td class="px-3 py-2 text-right num text-gray-400">$${m.pool}</td>
-      <td class="px-3 py-2 text-right num text-emerald-500">$${est_r.toFixed(2)}</td>
-      <td class="px-3 py-2 text-right num ${pos !== 0 ? 'text-yellow-300' : 'text-gray-600'}">${pos.toFixed(0)}</td>
-      <td class="px-3 py-2 text-center">
-        ${status} ${atRisk ? '🔴' : ''}
-      </td>
+  // markets table
+  document.getElementById('m-ts').textContent = new Date(d.ts).toLocaleTimeString('en-GB');
+  let topConc = {n:'—',p:0};
+  const rows = mkts.map((m,i)=>{
+    const yp=m.yes_mid, np=m.no_mid, chg=m.yes_chg;
+    const spr = (m.yes_bid!=null&&m.yes_ask!=null)?((m.yes_ask-m.yes_bid)*100).toFixed(1):'—';
+    const pos = (m.yes_net_pos||0)+(m.no_net_pos||0);
+    const qmk = m.yes_qmin||186.9;
+    const est = (qmk/(qmk*100+qmk))*m.pool;
+    const flash = (prev[m.display]!=null && yp!=null && prev[m.display]!==yp) ? 'blink-flash':'';
+    prev[m.display]=yp;
+    const st = (m.yes_eligible&&m.no_eligible)?'<span class="up">●</span>':'<span class="amber">○</span>';
+    const risk = (m.yes_at_risk||m.no_at_risk)?'<span class="down">!</span>':'';
+    return `<tr class="${flash}">
+      <td class="l white">${m.display}${m.neg_risk?'<span class="dim"> ·neg</span>':''}</td>
+      <td class="num cyan">${fc(yp)}</td>
+      <td class="num ${cls(chg)}">${chg!=null?sgn(chg)+(chg*100).toFixed(1):'—'}</td>
+      <td class="num dim">${fc(m.yes_hi)}</td>
+      <td class="num dim">${fc(m.yes_lo)}</td>
+      <td class="num dim">${fc(np)}</td>
+      <td class="num up">${fc(m.yes_bid)}</td>
+      <td class="num down">${fc(m.yes_ask)}</td>
+      <td class="num dim">${spr}</td>
+      <td class="num">${qmk.toFixed(0)}</td>
+      <td class="num dim">$${m.pool}</td>
+      <td class="num up">$${est.toFixed(2)}</td>
+      <td class="num ${pos!==0?'amber':'flat'}">${pos.toFixed(0)}</td>
+      <td>${st}${risk}</td>
     </tr>`;
   });
-  tbody.innerHTML = rows.join('');
+  document.getElementById('mtbody').innerHTML = rows.join('') ||
+    '<tr><td colspan="14" class="l dim">no data</td></tr>';
 
-  // Update chart
-  const datasets = Object.entries(priceHistory)
-    .filter(([_, h]) => h.length > 0)
-    .map(([name, hist], i) => ({
-      label: name,
-      data: hist,
-      borderColor: COLORS[i % COLORS.length],
-      backgroundColor: 'transparent',
-      borderWidth: 1.5,
-      pointRadius: 0,
-      tension: 0.3,
-    }));
-  const maxLen = Math.max(1, ...datasets.map(ds => ds.data.length));
-  priceChart.data.labels = Array.from({length: maxLen}, (_, i) => i);
-  priceChart.data.datasets = datasets;
-  priceChart.update('none');
-
-  // Risk metrics
-  document.getElementById('risk-notional').textContent = fmt$(r.gross_notional);
-  const riskDelta = document.getElementById('risk-delta');
-  riskDelta.textContent = fmt$(r.net_delta);
-  riskDelta.className = 'num font-mono ' + clr(r.net_delta);
-  document.getElementById('risk-maxloss').textContent = fmt$(r.max_loss);
-  document.getElementById('risk-var').textContent =
-    r.var_95_1day != null ? fmt$(r.var_95_1day) : 'N/A';
-  document.getElementById('risk-var-note').textContent = r.var_note || '';
-  document.getElementById('risk-stress-goal').textContent = fmt$(r.stress_one_goal);
-  document.getElementById('risk-stress-out').textContent = fmt$(r.stress_all_out);
-  document.getElementById('risk-stress-win').textContent = fmt$(r.stress_winner);
-  document.getElementById('risk-total-reward').textContent = fmt$(r.est_reward_day);
-
-  // Reward breakdown
-  if (r.reward_breakdown) {
-    document.getElementById('reward-breakdown').innerHTML =
-      r.reward_breakdown.map(rb =>
-        `<div class="flex justify-between text-xs">
-           <span class="text-gray-600">${rb.display} (Qmin ${rb.qmin}, pool $${rb.pool})</span>
-           <span class="num text-emerald-600">$${rb.est_reward.toFixed(2)}</span>
-         </div>`
-      ).join('');
+  // risk panel
+  document.getElementById('s-goal').textContent = fd(r.stress_one_goal);
+  document.getElementById('s-out').textContent = fd(r.stress_all_out);
+  document.getElementById('s-win').textContent = fd(r.stress_winner);
+  const sd = document.getElementById('s-delta');
+  sd.textContent = fd(r.net_delta); sd.className='val num '+cls(r.net_delta);
+  document.getElementById('s-rew').textContent = fd(r.est_reward_day);
+  if(r.concentration){
+    const top = r.concentration.reduce((a,b)=>b.pct>a.pct?b:a, {pct:0,display:'—'});
+    document.getElementById('s-conc').textContent = top.pct.toFixed(0)+'%';
+    document.getElementById('s-conc-sub').textContent = top.display;
   }
 
-  // Concentration bars
-  if (r.concentration) {
-    document.getElementById('concentration').innerHTML =
-      r.concentration.map((c, i) =>
-        `<div>
-           <div class="flex justify-between text-xs mb-0.5">
-             <span class="text-gray-400">${c.display}</span>
-             <span class="text-gray-400 num">${c.pct}%</span>
-           </div>
-           <div class="w-full bg-gray-800 rounded h-1.5">
-             <div class="h-1.5 rounded" style="width:${c.pct}%;background:${COLORS[i%COLORS.length]}"></div>
-           </div>
-         </div>`
-      ).join('');
-  }
+  // system
+  const yb=document.getElementById('y-bot');
+  if(d.bot_running){ yb.innerHTML='<span class="up">● RUN</span>'; document.getElementById('y-bot-sub').textContent='PID '+(d.bot_pid||'?'); }
+  else { yb.innerHTML='<span class="dim">○ STOP</span>'; document.getElementById('y-bot-sub').innerHTML='&nbsp;'; }
+  document.getElementById('y-feed').textContent = d.feed_p50_ms!=null?`${d.feed_p50_ms.toFixed(1)} / ${d.feed_p99_ms?.toFixed(1)??'—'}`:'—';
+  document.getElementById('y-tel').textContent = d.tel_rows>0?d.tel_rows.toLocaleString():'—';
+  document.getElementById('y-conn').textContent = (d.reconnect_count||0)+' / '+(d.msg_per_sec?.toFixed(1)??'—')+'s⁻¹';
 
-  // System health
-  const botEl = document.getElementById('sys-bot');
-  if (d.bot_running) {
-    botEl.innerHTML = `<span class="text-emerald-400">● Running</span> <span class="text-gray-600">PID ${d.bot_pid||'?'}</span>`;
-  } else {
-    botEl.innerHTML = `<span class="text-gray-500">○ Stopped</span>`;
-  }
-  document.getElementById('sys-feed').textContent =
-    d.feed_p50_ms != null
-      ? `${d.feed_p50_ms.toFixed(1)}ms / ${d.feed_p99_ms?.toFixed(1) ?? '—'}ms`
-      : '— (bot offline)';
-  document.getElementById('sys-tel').textContent =
-    d.tel_rows > 0 ? d.tel_rows.toLocaleString() + ' rows' : '—';
-  document.getElementById('sys-conn').textContent =
-    (d.reconnect_count||0) + ' recon / ' + (d.msg_per_sec?.toFixed(1) ?? '—') + '/s';
+  document.getElementById('foot').firstChild.textContent =
+    d.exec_mode==='live'
+    ? 'LIVE — positions and P&L reflect real fills. '
+    : 'MOCKLIVE — gross notional hypothetical (no orders placed), P&L $0 until exec_mode=live. ';
 }
 
-// WebSocket connection with auto-reconnect
-function connect() {
-  const wsUrl = `ws://${location.host}/ws`;
-  const ws = new WebSocket(wsUrl);
-  const dot   = document.getElementById('ws-dot');
-  const label = document.getElementById('ws-label');
-
-  ws.onopen = () => {
-    dot.className = 'w-2 h-2 rounded-full bg-emerald-400';
-    dot.classList.remove('blink');
-    label.textContent = 'Live';
-  };
-  ws.onmessage = e => {
-    try { update(JSON.parse(e.data)); } catch (_) {}
-  };
-  ws.onclose = ws.onerror = () => {
-    dot.className = 'w-2 h-2 rounded-full bg-red-500 blink';
-    label.textContent = 'Disconnected – retrying…';
-    setTimeout(connect, 3000);
-  };
+function connect(){
+  const ws = new WebSocket(`ws://${location.host}/ws`);
+  const dot=document.getElementById('t-dot'), link=document.getElementById('t-link');
+  ws.onopen = ()=>{ dot.className='dot on'; link.textContent='LIVE'; link.className=''; };
+  ws.onmessage = e=>{ try{ render(JSON.parse(e.data)); }catch(_){} };
+  ws.onclose = ws.onerror = ()=>{ dot.className='dot off'; link.innerHTML='<span class="down">RETRY</span>'; setTimeout(connect,3000); };
 }
-
 connect();
-
-// Also poll /state every 30s as a backup in case WS drops
-setInterval(async () => {
-  try {
-    const r = await fetch('/state');
-    const d = await r.json();
-    update(d);
-  } catch (_) {}
-}, 30000);
+setInterval(async()=>{ try{ render(await (await fetch('/state')).json()); }catch(_){} }, 30000);
 </script>
 </body>
 </html>

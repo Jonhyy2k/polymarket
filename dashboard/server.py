@@ -78,6 +78,8 @@ for _c in _cfg["contracts"]:
         # live REST prices (updated every 5s)
         "yes_bid": None, "yes_ask": None, "yes_mid": None,
         "no_bid":  None, "no_ask":  None, "no_mid":  None,
+        # session reference (first mid seen) + hi/lo for Δ column
+        "yes_open": None, "yes_hi": None, "yes_lo": None,
         # telemetry state (updated from CSV)
         "tel_yes_mid_thou": None, "tel_no_mid_thou": None,
         "yes_qmin": None, "no_qmin": None,
@@ -140,9 +142,18 @@ async def _poll_prices():
                 m[f"{side}_bid"] = bb
                 m[f"{side}_ask"] = ba
                 if bb is not None and ba is not None:
-                    m[f"{side}_mid"] = round((bb + ba) / 2, 4)
-                    m[f"{side}_history"].append(m[f"{side}_mid"])
+                    mid = round((bb + ba) / 2, 4)
+                    m[f"{side}_mid"] = mid
+                    m[f"{side}_history"].append(mid)
                     ok = True
+                    if side == "yes":
+                        if m["yes_open"] is None:
+                            m["yes_open"] = mid
+                            m["yes_hi"] = mid
+                            m["yes_lo"] = mid
+                        else:
+                            m["yes_hi"] = max(m["yes_hi"], mid)
+                            m["yes_lo"] = min(m["yes_lo"], mid)
         state["rest_ok"] = ok
         await asyncio.sleep(5)
 
@@ -411,11 +422,16 @@ def _build_payload() -> Dict:
         no_p = m["no_mid"] or (
             m["tel_no_mid_thou"] / 1000 if m["tel_no_mid_thou"] else None
         )
+        yes_chg = (yes_p - m["yes_open"]) if (yes_p is not None and m["yes_open"]) else None
         markets_out.append({
             "display":     m["display"],
             "yes_bid":     m["yes_bid"],
             "yes_ask":     m["yes_ask"],
             "yes_mid":     yes_p,
+            "yes_open":    m["yes_open"],
+            "yes_hi":      m["yes_hi"],
+            "yes_lo":      m["yes_lo"],
+            "yes_chg":     round(yes_chg, 4) if yes_chg is not None else None,
             "no_bid":      m["no_bid"],
             "no_ask":      m["no_ask"],
             "no_mid":      no_p,
