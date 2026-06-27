@@ -25,7 +25,7 @@ from fastapi.responses import HTMLResponse
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR   = Path(__file__).parent.parent
-CFG_FILE   = BASE_DIR / "config.live_ireland.json"
+CFG_FILE   = BASE_DIR / "config.live.json"
 TEL_FILE   = BASE_DIR / "logs/quote_telemetry.csv"
 BOT_LOG    = Path("/tmp/bot_telemetry.log")
 HTML_FILE  = Path(__file__).parent / "index.html"
@@ -109,9 +109,41 @@ state = {
     "tel_last_ts_ns":   0,
     "last_update":      None,
     "markets":          MARKETS,
+    # on-chain wallet snapshot (polled from Polygon)
+    "pusd":             None,
+    "pol":              None,
+    "wallet_ts":        None,
 }
 
 _clients: Set[WebSocket] = set()
+
+# ─── On-chain wallet snapshot (collateral + gas) ──────────────────────────────
+WALLET_ADDR = "0x4E3b143938947039b2F0b13BD1038683DE57851F"
+PUSD_TOKEN  = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
+POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
+
+def _rpc(method: str, params: list):
+    body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
+    req = urllib.request.Request(POLYGON_RPC, data=body, method="POST",
+                                 headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        return json.loads(r.read()).get("result")
+
+def _read_wallet():
+    try:
+        d = "0x70a08231" + "0" * 24 + WALLET_ADDR[2:].lower()
+        pusd = _rpc("eth_call", [{"to": PUSD_TOKEN, "data": d}, "latest"])
+        pol = _rpc("eth_getBalance", [WALLET_ADDR, "latest"])
+        state["pusd"] = int(pusd, 16) / 1e6 if pusd and pusd != "0x" else None
+        state["pol"] = int(pol, 16) / 1e18 if pol else None
+        state["wallet_ts"] = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        pass
+
+async def _poll_wallet():
+    while True:
+        await asyncio.get_event_loop().run_in_executor(None, _read_wallet)
+        await asyncio.sleep(30)
 
 # ─── REST price fetch ─────────────────────────────────────────────────────────
 def _fetch_book(token_id: str) -> Optional[Dict]:
@@ -460,6 +492,12 @@ def _build_payload() -> Dict:
         "msg_per_sec":     state["msg_per_sec"],
         "rest_ok":         state["rest_ok"],
         "tel_rows":        state["tel_rows"],
+        "wallet": {
+            "address": WALLET_ADDR,
+            "pusd":    state["pusd"],
+            "pol":     state["pol"],
+            "ts":      state["wallet_ts"],
+        },
         "markets":         markets_out,
         "risk":            risk,
     }
@@ -472,6 +510,7 @@ async def startup():
     asyncio.create_task(_poll_prices())
     asyncio.create_task(_poll_telemetry())
     asyncio.create_task(_poll_bot_log())
+    asyncio.create_task(_poll_wallet())
     asyncio.create_task(_broadcast_loop())
 
 @app.get("/", response_class=HTMLResponse)

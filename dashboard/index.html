@@ -124,6 +124,8 @@
   <div class="riskcell"><div class="lbl">Max Loss</div><div class="val down num" id="k-maxloss">—</div><div class="sub">all positions → 0</div></div>
   <div class="riskcell"><div class="lbl">VaR 95% 1d</div><div class="val amber num" id="k-var">—</div><div class="sub" id="k-var-sub">—</div></div>
   <div class="riskcell"><div class="lbl">Markets Live</div><div class="val cyan num" id="k-mkts">—</div><div class="sub" id="k-elig">—</div></div>
+  <div class="riskcell"><div class="lbl">Collateral pUSD</div><div class="val white num" id="k-pusd">—</div><div class="sub">on-chain wallet</div></div>
+  <div class="riskcell"><div class="lbl">Gas POL</div><div class="val num" id="k-pol">—</div><div class="sub" id="k-wallet">polygon</div></div>
 </div>
 
 <!-- ── Markets ── -->
@@ -193,6 +195,10 @@ function render(d){
 
   document.getElementById('t-feed').textContent = d.feed_p50_ms!=null ? d.feed_p50_ms.toFixed(1)+'ms' : 'off';
   document.getElementById('t-rest').innerHTML = d.rest_ok ? '<span class="up">OK</span>' : '<span class="down">DOWN</span>';
+
+  const w = d.wallet||{};
+  document.getElementById('k-pusd').textContent = w.pusd!=null ? w.pusd.toFixed(2) : '—';
+  document.getElementById('k-pol').textContent  = w.pol!=null ? w.pol.toFixed(2) : '—';
 
   const r = d.risk||{};
   document.getElementById('k-aum').textContent = fd(r.gross_notional);

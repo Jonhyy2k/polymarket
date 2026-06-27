@@ -76,7 +76,7 @@ cfg.update({
     "live_order_type": "GTC",
     # conservative risk caps for the first live capital
     "risk_max_gross_notional_usd": 25.0,
-    "risk_max_open_orders_total": 4,
+    "risk_max_open_orders_total": 6,
     "risk_max_position_shares": 100.0,
     "dead_mans_switch_seconds": 30,     # flatten if the feed goes stale
     "shadow_executor_verbose": True,    # log each CREATE/CANCEL
