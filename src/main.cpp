@@ -10,6 +10,7 @@
 #include "acr.hpp"
 #include "throttle.hpp"
 #include "mock_live_gateway.hpp"
+#include "live_gateway.hpp"
 #include "runtime.hpp"
 #include "pipeline.hpp"
 
@@ -193,6 +194,18 @@ Config load_config(const std::string& path) {
         config.live_signer_address = std::string(sv);
     if (!doc["live_signature_type"].get_int64().get(iv))
         config.live_signature_type = (int)iv;
+    if (!doc["live_host"].get_string().get(sv))
+        config.live_host = std::string(sv);
+    if (!doc["live_port"].get_string().get(sv))
+        config.live_port = std::string(sv);
+    if (!doc["live_arm"].get_bool().get(bv))
+        config.live_arm = bv;
+    if (!doc["live_order_type"].get_string().get(sv))
+        config.live_order_type = std::string(sv);
+    if (!doc["live_cancel_all_on_start"].get_bool().get(bv))
+        config.live_cancel_all_on_start = bv;
+    if (!doc["live_order_version"].get_int64().get(iv))
+        config.live_order_version = (int)iv;
     if (!doc["near_miss_live_log_file"].get_string().get(sv))
         config.near_miss_live_log_file = std::string(sv);
     if (!doc["risk_pusd_allowance_usd"].get_double().get(dv))
@@ -894,15 +907,62 @@ int main(int argc, char* argv[]) {
     signer_cfg.signature_type = static_cast<live::SigType>(config.live_signature_type);
     live::MockLiveGateway mock_exec(signer_cfg, config.shadow_executor_verbose);
 
+    // Constructed only when exec_mode=live. Held in main scope so the sender
+    // thread uses it and the end-of-run summary reads its stats after join.
+    std::unique_ptr<live::LiveGateway> live_exec;
+
     IExecGateway* exec_ptr = &shadow_exec;
     if (config.shadow_executor_enabled) {
         if (exec_mode == ExecMode::MockLive) {
             exec_ptr = &mock_exec;
             live::MockLiveGateway::describe();
         } else if (exec_mode == ExecMode::Live) {
-            std::printf("\n[LIVE] *** execution path is NOT built and is GATED "
-                        "(compliance/custody/v2 signing). Running SHADOW — no orders sent. ***\n\n");
-            // exec_ptr stays &shadow_exec: nothing is ever signed or sent.
+            live::LiveConfig lc;
+            lc.host = config.live_host;
+            lc.port = config.live_port;
+            lc.signer = signer_cfg;
+            lc.order_type = config.live_order_type;
+            lc.arm = config.live_arm;
+            lc.expected_version = config.live_order_version;
+            // Secrets come from the ENVIRONMENT only — never the config file, never
+            // logged. PM_SIGNER_KEY (EOA key) + PM_API_{KEY,SECRET,PASSPHRASE}.
+            if (const char* k = std::getenv("PM_SIGNER_KEY"); k && *k) {
+                lc.priv = eip712::word_hex(k);
+                lc.priv_loaded = true;
+            }
+            if (const char* a  = std::getenv("PM_API_KEY"); a)        lc.creds.api_key = a;
+            if (const char* s  = std::getenv("PM_API_SECRET"); s)     lc.creds.secret = s;
+            if (const char* pp = std::getenv("PM_API_PASSPHRASE"); pp) lc.creds.passphrase = pp;
+            lc.creds.address = lc.priv_loaded ? eip712::address_from_privkey(lc.priv)
+                                              : config.live_signer_address;
+            // If signer/maker were left at the zero default, fill from the key.
+            const std::string zero = "0x0000000000000000000000000000000000000000";
+            if (lc.signer.signer.empty() || lc.signer.signer == zero)
+                lc.signer.signer = lc.creds.address;
+            if (lc.signer.maker.empty() || lc.signer.maker == zero)
+                lc.signer.maker = lc.creds.address;
+
+            live_exec = std::make_unique<live::LiveGateway>(std::move(lc),
+                                                            config.shadow_executor_verbose);
+            std::string reason;
+            const bool ok = live_exec->preflight(reason);
+            std::printf("\n[LIVE] preflight: %s — %s\n", ok ? "PASS" : "FAIL", reason.c_str());
+            if (!ok) {
+                std::printf("[LIVE] *** preflight failed -> staying SHADOW (no orders sent). ***\n\n");
+            } else {
+                exec_ptr = live_exec.get();
+                if (!config.live_arm) {
+                    std::printf("[LIVE] DRY-RUN (live_arm=false): orders are signed + built but "
+                                "NOT POSTed. Flip live_arm=true to send real orders.\n\n");
+                } else {
+                    std::printf("[LIVE] *** ARMED: real orders WILL be sent and funds WILL move. ***\n");
+                    if (config.live_cancel_all_on_start) {
+                        const bool c = live_exec->cancel_all();
+                        std::printf("[LIVE] startup cancel-all: %s\n", c ? "ok" : "noop/err");
+                    }
+                    std::printf("\n");
+                }
+            }
         }
         std::printf("[EXEC] mode=%s\n", exec_mode_name(exec_mode));
     }
@@ -1626,6 +1686,20 @@ int main(int argc, char* argv[]) {
                         near_miss_live ? near_miss_live->count() : 0,
                         config.near_miss_live_log_file.c_str(),
                         dropped_quote_telemetry.load(std::memory_order_relaxed));
+        }
+        if (exec_mode == ExecMode::Live && live_exec) {
+            const live::LiveStats& ls = live_exec->stats();
+            const double avg_sign_us = ls.sign_count ? ls.sign_us_total / ls.sign_count : 0.0;
+            std::printf("[LIVE] %s | submits=%" PRIu64 " ok=%" PRIu64 " err=%" PRIu64
+                        " dry=%" PRIu64 " | cancels=%" PRIu64 " ok=%" PRIu64 " err=%" PRIu64
+                        " unknown=%" PRIu64 "\n",
+                        live_exec->armed() ? "ARMED" : "DRY-RUN",
+                        ls.submits, ls.submit_ok, ls.submit_err, ls.submit_dry,
+                        ls.cancels, ls.cancel_ok, ls.cancel_err, ls.cancel_unknown);
+            std::printf("[LIVE] sign avg=%.1fus (n=%" PRIu64 ") | last POST=%.1fms%s%s\n",
+                        avg_sign_us, ls.sign_count, ls.last_post_ms,
+                        ls.last_error.empty() ? "" : " | last error: ",
+                        ls.last_error.c_str());
         }
     }
 

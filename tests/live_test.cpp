@@ -312,6 +312,69 @@ int main() {
         CHECK(sign_digest_hex(od, k1, os), "sign: real order digest signs without error");
     }
 
+    // ---- CLOB V2 order: digest + signature + wire body cross-checked against
+    //      eth_account / orderToJsonV2 (tools/ref_order_v2.py, fixed vectors).
+    //      This is the money-path proof: a real V2 order our C++ produces is
+    //      byte-identical to what @polymarket/clob-client-v2 would sign+send. ----
+    {
+        using namespace eip712;
+        const char* k2 = "0x4f3edf983ac636a65a842ce7c78d9aa706d3b113bce9c46f30d7d21715b23b1d";
+        const std::string addr = "0x90F8bf6A479f320ead074411a4B0e7944Ea8c9C1";  // checksummed
+
+        live::LiveOrderPayload p;
+        p.salt = 479249096354ull;
+        p.maker = addr;
+        p.signer = addr;
+        p.token_id =
+            "71321045679252212594626385532706912750332728571942532289631379312455583992563";
+        p.maker_amount = 1000000ull;
+        p.taker_amount = 2000000ull;
+        p.side = 0;            // BUY
+        p.signature_type = 0;  // EOA
+        p.timestamp_ms = 1713398400000ull;
+
+        // standard exchange (0xE111…, domain version "2")
+        p.neg_risk = false;
+        const Bytes32 d_std = live::digest(p);
+        CHECK(to_hex(d_std) ==
+              "0x0abfa46eea5844ea644c3284367a06cbda593c12af91393c088dcdea93c6b605",
+              "v2: standard digest == eth_account reference");
+        Sig65 sg{};
+        CHECK(sign_digest_hex(d_std, k2, sg) &&
+              sig_to_hex(sg) ==
+              "0x446b33791a3a6bfa2a82bb399c22990c28fb3f4a27436cb41f46cda4818c0ee4"
+              "761e3f242c89213643db7cd64e4fb1eac593f47463b8f11be31838766cc7988c1b",
+              "v2: standard signature == eth_account reference");
+        CHECK(live::wire_body(p, sig_to_hex(sg), "<api-key>") ==
+              "{\"deferExec\":false,\"postOnly\":false,\"order\":{\"salt\":479249096354,"
+              "\"maker\":\"0x90F8bf6A479f320ead074411a4B0e7944Ea8c9C1\","
+              "\"signer\":\"0x90F8bf6A479f320ead074411a4B0e7944Ea8c9C1\","
+              "\"tokenId\":\"71321045679252212594626385532706912750332728571942532289"
+              "631379312455583992563\","
+              "\"makerAmount\":\"1000000\",\"takerAmount\":\"2000000\",\"side\":\"BUY\","
+              "\"signatureType\":0,\"timestamp\":\"1713398400000\",\"expiration\":\"0\","
+              "\"metadata\":\"0x000000000000000000000000000000000000000000000000000000"
+              "0000000000\","
+              "\"builder\":\"0x0000000000000000000000000000000000000000000000000000000"
+              "000000000\","
+              "\"signature\":\"0x446b33791a3a6bfa2a82bb399c22990c28fb3f4a27436cb41f46cd"
+              "a4818c0ee4761e3f242c89213643db7cd64e4fb1eac593f47463b8f11be31838766cc798"
+              "8c1b\"},\"owner\":\"<api-key>\",\"orderType\":\"GTC\"}",
+              "v2: standard wire body == orderToJsonV2 reference");
+
+        // neg-risk exchange (0xe222…, same domain name + version "2")
+        p.neg_risk = true;
+        const Bytes32 d_neg = live::digest(p);
+        CHECK(to_hex(d_neg) ==
+              "0x5376ddb40bce4059e6144d33803de84d804b1caaa03874667139e75541416557",
+              "v2: neg-risk digest == eth_account reference");
+        CHECK(sign_digest_hex(d_neg, k2, sg) &&
+              sig_to_hex(sg) ==
+              "0xbf23429a6c67434498431e71ef2209db067e846956c6fc6e7a738f15b814578c"
+              "60b2cb67d2a000fc1ccbeeadcb78b62b1359d015408ab718549ce2c18c987fba1c",
+              "v2: neg-risk signature == eth_account reference");
+    }
+
     std::printf("\n%s\n", g_failures == 0 ? "ALL PASS" : "FAILURES PRESENT");
     return g_failures == 0 ? 0 : 1;
 }

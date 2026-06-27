@@ -78,7 +78,7 @@ inline LiveOrderPayload make_payload(const SignerConfig& cfg, std::string_view t
 }
 
 inline eip712::OrderWords encode(const LiveOrderPayload& p) {
-    eip712::OrderWords w;
+    eip712::OrderWords w{};  // value-init: metadata + builder stay zero bytes32
     w.salt           = eip712::word_u64(p.salt);
     w.maker          = eip712::word_hex(p.maker);
     w.signer         = eip712::word_hex(p.signer);
@@ -100,6 +100,41 @@ inline eip712::Bytes32 digest(const LiveOrderPayload& p) {
         p.neg_risk ? eip712::polymarket_v2::neg_risk_separator()
                    : eip712::polymarket_v2::standard_separator();
     return eip712::typed_data_hash(dom_sep, eip712::hash_struct(encode(p)));
+}
+
+// Zero bytes32 used for metadata + builder when no builder code is attached.
+inline constexpr std::string_view kZeroBytes32 =
+    "0x0000000000000000000000000000000000000000000000000000000000000000";
+
+// Serialize the exact POST /order wire body (CLOB V2, `orderToJsonV2`). The
+// signature is the 65-byte EOA sig hex (from eip712_sign), owner is the L2 API
+// key, order_type is GTC/GTD/FOK/FAK. Byte-for-byte matches the official
+// client's body (tools/ref_order_v2.py vectors) — IMPORTANT because the L2 HMAC
+// is computed over this exact string, so any drift breaks auth. Note the V2
+// quirks vs the signed struct: here `salt` is an integer and `side` is the
+// string "BUY"/"SELL" (the struct signs side as uint8 0/1); there is no `taker`.
+inline std::string wire_body(const LiveOrderPayload& p, std::string_view signature_hex,
+                             std::string_view owner_api_key,
+                             std::string_view order_type = "GTC") {
+    std::string s;
+    s.reserve(720);
+    s += "{\"deferExec\":false,\"postOnly\":false,\"order\":{";
+    s += "\"salt\":";              s += std::to_string(p.salt);
+    s += ",\"maker\":\"";          s += p.maker;
+    s += "\",\"signer\":\"";       s += p.signer;
+    s += "\",\"tokenId\":\"";      s += p.token_id;
+    s += "\",\"makerAmount\":\"";  s += std::to_string(p.maker_amount);
+    s += "\",\"takerAmount\":\"";  s += std::to_string(p.taker_amount);
+    s += "\",\"side\":\"";         s += (p.side == 0 ? "BUY" : "SELL");
+    s += "\",\"signatureType\":";  s += std::to_string(p.signature_type);
+    s += ",\"timestamp\":\"";      s += std::to_string(p.timestamp_ms);
+    s += "\",\"expiration\":\"0\",\"metadata\":\""; s += kZeroBytes32;
+    s += "\",\"builder\":\"";      s += kZeroBytes32;
+    s += "\",\"signature\":\"";    s += signature_hex;
+    s += "\"},\"owner\":\"";       s += owner_api_key;
+    s += "\",\"orderType\":\"";    s += order_type;
+    s += "\"}";
+    return s;
 }
 
 // ── Pre-send quote validation (feeds near_miss_live.log) ────────────────────

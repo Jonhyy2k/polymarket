@@ -110,6 +110,7 @@ add_executable(arb_detector
     src/rewards.cpp
     src/oms.cpp
     src/mock_live_gateway.cpp
+    src/live_gateway.cpp
 )
 
 # Always -O3 -march=native for the hot path
@@ -142,6 +143,7 @@ target_link_libraries(arb_detector
     simdjson
     OpenSSL::SSL
     OpenSSL::Crypto
+    secp256k1
     pthread
 )
 

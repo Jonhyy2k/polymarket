@@ -243,6 +243,17 @@ struct Config {
     std::string live_maker_address  = "0x0000000000000000000000000000000000000000";
     std::string live_signer_address = "0x0000000000000000000000000000000000000000";
     int         live_signature_type = 0;          // 0 EOA, 1 POLY_PROXY, 2 POLY_GNOSIS_SAFE
+    // ── Live order path (exec_mode="live"). API creds + EOA key are read from the
+    // ENVIRONMENT only (PM_API_KEY/PM_API_SECRET/PM_API_PASSPHRASE/PM_SIGNER_KEY) —
+    // NEVER from this config file, never logged. `live_arm` is a hard safety latch:
+    // unless true, live mode signs+builds but does NOT POST (dry-run). The gateway
+    // also self-gates on a GET /version preflight (must be the v2 it was built for).
+    std::string live_host = "clob.polymarket.com";
+    std::string live_port = "443";
+    bool        live_arm = false;                 // false => dry-run (no POST), the safe default
+    std::string live_order_type = "GTC";          // GTC resting maker quote (rewards)
+    bool        live_cancel_all_on_start = true;   // clear any orphaned resting orders first
+    int         live_order_version = 2;            // expected CLOB order version (preflight checks /version)
     std::string near_miss_live_log_file = "logs/near_miss_live.csv";
     uint32_t    reward_quote_size = 0;            // 0 => use each market's min_size
     uint32_t    reward_target_offset_thou = 0;    // 0 => tightest (1 tick)
