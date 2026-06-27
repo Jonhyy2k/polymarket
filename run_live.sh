@@ -99,4 +99,4 @@ if $ARM; then
   [[ "$ok" == "ARM" ]] || { echo "aborted."; exit 1; }
 fi
 
-exec "$BIN" "$CONFIG"
+exec "$BIN" --config "$CONFIG"
