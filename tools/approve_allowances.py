@@ -20,10 +20,11 @@ import argparse
 import json
 import os
 import sys
+import time
 import urllib.request
 
 from eth_account import Account
-from eth_utils import keccak
+from eth_utils import keccak, to_checksum_address
 
 CHAIN_ID = 137
 CTF = "0x4D97DCd97eC945f40cF65F87097ACe5EA0476045"
@@ -57,7 +58,7 @@ def rpc_call(rpc: str, method: str, params: list):
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
     req = urllib.request.Request(
         rpc, data=json.dumps(payload).encode(), method="POST",
-        headers={"Content-Type": "application/json"})
+        headers={"Content-Type": "application/json", "User-Agent": "Mozilla/5.0"})
     with urllib.request.urlopen(req, timeout=20) as r:
         body = json.loads(r.read())
     if "error" in body:
@@ -126,6 +127,7 @@ def main() -> int:
     print(f"start nonce={nonce}  gasPrice={gas_price/1e9:.1f} gwei  — broadcasting {len(txs)} txs\n")
 
     for name, to, data in txs:
+        to = to_checksum_address(to)
         tx = {
             "to": to, "data": data, "value": 0, "nonce": nonce,
             "chainId": CHAIN_ID, "gas": 120000, "gasPrice": gas_price,
@@ -140,8 +142,17 @@ def main() -> int:
         raw = signed.raw_transaction.hex()
         raw = raw if raw.startswith("0x") else "0x" + raw
         txh = rpc_call(args.rpc, "eth_sendRawTransaction", [raw])
-        print(f"  {name}: sent nonce={nonce} tx={txh}")
+        print(f"  {name}: sent nonce={nonce} tx={txh}  (waiting...)")
         nonce += 1
+        for _ in range(60):
+            time.sleep(2)
+            rcpt = rpc_call(args.rpc, "eth_getTransactionReceipt", [txh])
+            if rcpt:
+                ok = int(rcpt.get("status", "0x0"), 16) == 1
+                print(f"       mined: {'OK' if ok else 'REVERTED'}")
+                break
+        else:
+            print("       (no receipt yet; continuing)")
     print("\nAll approvals broadcast. Wait for confirmations, then run the bot live.")
     return 0
 
