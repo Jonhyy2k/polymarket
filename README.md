@@ -14,16 +14,25 @@ A low-latency C++ system for Polymarket's CLOB **v2** that does two things:
    dedicated cancel-sender thread. Built to evaluate the LP-rewards strategy
    before any live capital.
 
-> **This is NOT a live trading bot.** There is no order signing, no API auth, no
-> on-chain allowances, no money at risk. Everything that touches the exchange is
-> read-only (market data + public REST). The maker path logs intended orders; it
-> does not place them. Going live is gated on compliance clearance, key custody,
-> and verification of v2 signing specs — see [Not done / going live](#not-done--going-live).
+> **🟢 LIVE UPDATE (2026-06-28): the system now trades live** through a Polymarket
+> **deposit wallet** via a Python connector (`py-clob-client-v2`, signatureType-3 /
+> POLY_1271). The C++ engine drives it via a relay gateway, OR a standalone Python
+> market-maker (`tools/mm_gateway.py`) runs the strategy directly. It is **post-only,
+> cash-only, capped, and cancels-all on exit.** See **[Live trading](#live-trading-deposit-wallet-path)**
+> below and **[INSTRUCTIONS.md](INSTRUCTIONS.md)** for the full operator runbook.
+>
+> The original C++ scanner/maker described in the rest of this README remains
+> **read-only / shadow** (no key on that path); the *historical* "direct-EOA"
+> sign-and-send plan in [Not done / going live](#not-done--going-live) was
+> **superseded** — Polymarket V2 forces new accounts onto the deposit-wallet flow,
+> which the Python connector handles. Reward/PnL figures below are still gross,
+> snapshot, order-of-magnitude estimates with **unproven net**.
 
 ---
 
 ## Table of contents
 - [Status](#status)
+- [Live trading (deposit-wallet path)](#live-trading-deposit-wallet-path)
 - [Quick start](#quick-start)
 - [Architecture](#architecture)
 - [The scanner](#the-scanner)
@@ -72,6 +81,52 @@ e2e p50 **2.4 µs**, p99 7.3 µs; OMS→sender hand-off p50 ~1.3 µs / p99 ~100 
 **The matching engine is in London (AWS eu-west-2)**; feed delivery and cancel RTT
 are network-bound (~16 ms round-trip from Ireland) and dominate the in-process
 pipeline by ~4 orders of magnitude. See [Geography](#geography--latency).
+
+---
+
+## Live trading (deposit-wallet path)
+
+**The live path that actually works.** Full operator runbook: **[INSTRUCTIONS.md](INSTRUCTIONS.md)**.
+
+### Why this exists
+Polymarket V2 does **not** let a bare EOA trade — new accounts get a **deposit
+wallet** (an ERC-7739 smart wallet) whose orders must use **signatureType 3
+(POLY_1271 / ERC-7739 TypedDataSign)**. The C++ signer only does plain ECDSA
+(sigType 0/1/2), so the **Python SDK (`py-clob-client-v2`) does the sigType-3
+signing**. The L2 API key stays bound to the **owner EOA** and authenticates every
+request — the deposit wallet just needs to be the order's `maker`/`funder`.
+
+### Account model
+```
+EOA 0x4E3b…  (owner/signer, holds the key)  ──owns──▶  Deposit wallet 0x8323…
+  key: /home/ubuntu/.pm_signer_key                      holds pUSD + allowances = the maker
+```
+
+### Two ways to run
+| mode | command | notes |
+|---|---|---|
+| **(A) Python market-maker** | `PYTHONPATH=./.pmlibs python3 tools/mm_gateway.py --contracts 0 --size 5 --live` | self-contained; **proven live**; cash-only BUY-YES+BUY-NO, post-only, caps, DMS |
+| **(B) C++ engine → connector** | start `tools/order_gateway_server.py`, then run `arb_detector` with `exec_mode=relay` | fast strategy in C++, sigType-3 signing in Python via loopback HTTP |
+
+### Cash-only, two-sided
+We only place **BUY** orders — `BUY YES` *and* `BUY NO` (a NO bid at `p` = a YES ask
+at `1−p`). This quotes both sides and earns rewards **without token inventory** (a
+real SELL would need it). post-only ⇒ never crosses, never pays taker.
+
+### Status of the live path
+| piece | state |
+|---|---|
+| Deposit wallet funded + allowances set | ✅ (`0x8323…`, pUSD, MAX allowances) |
+| L2 auth (EOA-bound key) | ✅ accepted |
+| sigType-3 order signing (via SDK) | ✅ place / rest / cancel proven live |
+| `tools/mm_gateway.py` (mode A) | ✅ live-tested: placed, held, flattened, no orphan fills |
+| `tools/order_gateway_server.py` connector | ✅ endpoints + auth + caps tested |
+| `src/relay_gateway.hpp` + `exec_mode=relay` | ✅ builds, bridge-tested 3/3, 56/56 live_test |
+| C++ quoter cash-only adaptation (for fully-armed mode B) | ⚠️ **open** — its asks need inventory; use mode A meanwhile |
+
+> **Safety:** post-only, cash-only, hard caps, cancel-all on start/exit/signal,
+> dead-man's-switch, and a default-off arm latch (`--live` / `live_arm`). Key + L2
+> secret are chmod-600 files outside the repo, never logged or committed.
 
 ---
 
@@ -362,7 +417,8 @@ the live path.
 |---|---|---|---|
 | `shadow` (default) | logs the intended create/cancel | no | no |
 | `mocklive` | **builds the real v2 order + computes the full EIP-712 digest**, counts it, audits the quote — then stops | **no** | no |
-| `live` | real signer + CLOB POST — **not built, gated**; falls back to shadow with a warning | (gated) | (gated) |
+| `live` | direct EOA signer + CLOB POST (sigType 0/1/2) — built, but **superseded**: Polymarket V2 rejects bare-EOA makers ("use the deposit wallet flow") | (key) | (yes) |
+| **`relay`** | forwards create/cancel to the local **Python connector** (`tools/order_gateway_server.py`), which signs **sigType-3** (deposit wallet) + POSTs. The live path that works. Gated by `live_arm`; token from `$ORDER_GW_TOKEN`. | key in Python | yes |
 
 **MockLive** is the middle rung that de-risks going live without custody. On every
 create it maps the resting quote → the v2 `Order` struct → the 32-byte EIP-712

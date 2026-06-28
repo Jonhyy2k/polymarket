@@ -29,13 +29,14 @@
 //   Shadow   — log intended actions only (no keys/serialization/network).
 //   MockLive — build the v2 order + EIP-712 digest (no key, no signature, no send).
 //   Live     — real signer + CLOB POST (NOT built; gated on compliance/custody).
-enum class ExecMode : uint8_t { Shadow, MockLive, Live };
+enum class ExecMode : uint8_t { Shadow, MockLive, Live, Relay };
 
 inline const char* exec_mode_name(ExecMode m) noexcept {
     switch (m) {
         case ExecMode::Shadow:   return "shadow";
         case ExecMode::MockLive: return "mocklive";
         case ExecMode::Live:     return "live";
+        case ExecMode::Relay:    return "relay";
     }
     return "?";
 }

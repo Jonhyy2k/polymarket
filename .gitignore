@@ -26,3 +26,5 @@ __pycache__/
 .claude/
 .vscode/
 .idea/
+.pmlibs/
+mm_status.json

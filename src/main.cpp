@@ -11,6 +11,7 @@
 #include "throttle.hpp"
 #include "mock_live_gateway.hpp"
 #include "live_gateway.hpp"
+#include "relay_gateway.hpp"
 #include "runtime.hpp"
 #include "pipeline.hpp"
 
@@ -198,6 +199,10 @@ Config load_config(const std::string& path) {
         config.live_host = std::string(sv);
     if (!doc["live_port"].get_string().get(sv))
         config.live_port = std::string(sv);
+    if (!doc["relay_host"].get_string().get(sv))
+        config.relay_host = std::string(sv);
+    if (!doc["relay_port"].get_int64().get(iv))
+        config.relay_port = (int)iv;
     if (!doc["live_arm"].get_bool().get(bv))
         config.live_arm = bv;
     if (!doc["live_order_type"].get_string().get(sv))
@@ -899,6 +904,7 @@ int main(int argc, char* argv[]) {
     ExecMode exec_mode = ExecMode::Shadow;
     if (config.exec_mode == "mocklive") exec_mode = ExecMode::MockLive;
     else if (config.exec_mode == "live") exec_mode = ExecMode::Live;
+    else if (config.exec_mode == "relay") exec_mode = ExecMode::Relay;
 
     ShadowGateway shadow_exec(config.shadow_executor_verbose);
     live::SignerConfig signer_cfg;
@@ -910,6 +916,8 @@ int main(int argc, char* argv[]) {
     // Constructed only when exec_mode=live. Held in main scope so the sender
     // thread uses it and the end-of-run summary reads its stats after join.
     std::unique_ptr<live::LiveGateway> live_exec;
+    // Constructed only when exec_mode=relay (deposit-wallet path via Python connector).
+    std::unique_ptr<live::RelayGateway> relay_exec;
 
     IExecGateway* exec_ptr = &shadow_exec;
     if (config.shadow_executor_enabled) {
@@ -959,6 +967,34 @@ int main(int argc, char* argv[]) {
                     if (config.live_cancel_all_on_start) {
                         const bool c = live_exec->cancel_all();
                         std::printf("[LIVE] startup cancel-all: %s\n", c ? "ok" : "noop/err");
+                    }
+                    std::printf("\n");
+                }
+            }
+        } else if (exec_mode == ExecMode::Relay) {
+            live::RelayConfig rc;
+            rc.host = config.relay_host;
+            rc.port = config.relay_port;
+            rc.arm = config.live_arm;     // same hard latch: false => build, don't POST
+            rc.verbose = config.shadow_executor_verbose;
+            // Bearer token from the ENVIRONMENT only (never the config, never logged).
+            if (const char* t = std::getenv("ORDER_GW_TOKEN"); t && *t) rc.token = t;
+            relay_exec = std::make_unique<live::RelayGateway>(std::move(rc));
+            std::string reason;
+            const bool ok = relay_exec->preflight(reason);
+            std::printf("\n[RELAY] preflight: %s — %s\n", ok ? "PASS" : "FAIL", reason.c_str());
+            if (!ok) {
+                std::printf("[RELAY] *** connector down -> staying SHADOW (no orders sent). ***\n\n");
+            } else {
+                exec_ptr = relay_exec.get();
+                if (!config.live_arm) {
+                    std::printf("[RELAY] DRY-RUN (live_arm=false): order intents are built but "
+                                "NOT forwarded. Flip live_arm=true to send via the connector.\n\n");
+                } else {
+                    std::printf("[RELAY] *** ARMED: orders WILL be sent via the connector. ***\n");
+                    if (config.live_cancel_all_on_start) {
+                        const bool c = relay_exec->cancel_all();
+                        std::printf("[RELAY] startup cancel-all: %s\n", c ? "ok" : "noop/err");
                     }
                     std::printf("\n");
                 }
@@ -1700,6 +1736,15 @@ int main(int argc, char* argv[]) {
                         avg_sign_us, ls.sign_count, ls.last_post_ms,
                         ls.last_error.empty() ? "" : " | last error: ",
                         ls.last_error.c_str());
+        }
+        if (exec_mode == ExecMode::Relay && relay_exec) {
+            if (config.live_arm) {
+                const bool c = relay_exec->cancel_all();   // flatten on exit
+                std::printf("[RELAY] shutdown cancel-all: %s\n", c ? "ok" : "noop/err");
+            }
+            std::printf("[RELAY] %s | forwarded=%" PRIu64 " dry=%" PRIu64 "\n",
+                        config.live_arm ? "ARMED" : "DRY-RUN",
+                        relay_exec->sent(), relay_exec->dry());
         }
     }
 

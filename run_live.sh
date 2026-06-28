@@ -60,19 +60,26 @@ PY
 
 # 4) inject the live-exec + safety block (conservative caps for a ~$20 first run)
 ARM_JSON=$([[ "$ARM" == true ]] && echo true || echo false)
-ADDR="$ADDR" ARM_JSON="$ARM_JSON" CONFIG="$CONFIG" python3 - <<'PY'
+# Proxy/deposit-wallet support: by default the maker == the signer EOA (sigType 0,
+# direct-EOA — rejected by V2). Once a Polymarket proxy exists, set:
+#   export PM_MAKER_ADDR=0x<proxy>   PM_SIG_TYPE=2   # 2=Gnosis Safe, 1=POLY_PROXY
+# and the maker becomes the proxy while the signer stays the EOA we hold the key for.
+MAKER_ADDR="${PM_MAKER_ADDR:-$ADDR}"
+SIG_TYPE="${PM_SIG_TYPE:-0}"
+ADDR="$ADDR" MAKER_ADDR="$MAKER_ADDR" SIG_TYPE="$SIG_TYPE" ARM_JSON="$ARM_JSON" CONFIG="$CONFIG" python3 - <<'PY'
 import json, os
 cfg = json.load(open(os.environ["CONFIG"]))
 addr = os.environ["ADDR"]; arm = os.environ["ARM_JSON"] == "true"
+maker = os.environ["MAKER_ADDR"]; sig_type = int(os.environ["SIG_TYPE"])
 cfg.update({
     "shadow_executor_enabled": True,    # gates the whole exec/sender path
     "exec_mode": "live",
     "live_arm": arm,                    # false => sign but DO NOT POST
     "live_order_version": 2,
     "live_cancel_all_on_start": True,
-    "live_signer_address": addr,
-    "live_maker_address": addr,
-    "live_signature_type": 0,           # EOA
+    "live_signer_address": addr,        # the EOA whose key we hold (always the signer)
+    "live_maker_address": maker,        # proxy address once it exists, else the EOA
+    "live_signature_type": sig_type,    # 0=EOA, 1=POLY_PROXY, 2=Gnosis Safe
     "live_order_type": "GTC",
     # conservative risk caps for the first live capital
     "risk_max_gross_notional_usd": 25.0,
@@ -86,7 +93,8 @@ PY
 
 # 5) loud banner + launch
 echo "────────────────────────────────────────────────────────────"
-echo " trading address : $ADDR"
+echo " signer (EOA)    : $ADDR"
+echo " maker           : $MAKER_ADDR  (sigType $SIG_TYPE: $([[ "$SIG_TYPE" == 0 ]] && echo 'EOA — direct, V2-rejected' || ([[ "$SIG_TYPE" == 2 ]] && echo 'Gnosis Safe proxy' || echo 'POLY_PROXY')))"
 echo " config          : $CONFIG  (contracts: $(python3 -c "import json;print(len(json.load(open('$CONFIG'))['contracts']))"))"
 if $ARM; then
   echo " mode            : *** ARMED — REAL ORDERS, REAL MONEY ***"

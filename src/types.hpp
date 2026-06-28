@@ -254,6 +254,12 @@ struct Config {
     std::string live_order_type = "GTC";          // GTC resting maker quote (rewards)
     bool        live_cancel_all_on_start = true;   // clear any orphaned resting orders first
     int         live_order_version = 2;            // expected CLOB order version (preflight checks /version)
+    // exec_mode="relay": forward orders to the local Python order-gateway connector
+    // (tools/order_gateway_server.py), which signs sigType-3 (deposit wallet) + POSTs.
+    // The bearer token comes from $ORDER_GW_TOKEN (env), never the config. live_arm
+    // still gates sending (false => the relay builds requests but does not POST).
+    std::string relay_host = "127.0.0.1";
+    int         relay_port = 8765;
     std::string near_miss_live_log_file = "logs/near_miss_live.csv";
     uint32_t    reward_quote_size = 0;            // 0 => use each market's min_size
     uint32_t    reward_target_offset_thou = 0;    // 0 => tightest (1 tick)
