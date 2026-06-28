@@ -292,10 +292,19 @@ def _dte(iso):
     except Exception:
         return None
 
+_SCREENER_ALL = []   # full processed reward-market list, for /search
+
 def _read_screener():
     try:
-        sm = _get_clob().get_sampling_markets()
-        items = sm.get("data", sm) if isinstance(sm, dict) else sm
+        c = _get_clob()
+        items, cur = [], None
+        for _ in range(12):   # ~8 pages × 1000 covers the full reward-market universe
+            page = c.get_sampling_markets(next_cursor=cur) if cur else c.get_sampling_markets()
+            data = page.get("data", page) if isinstance(page, dict) else page
+            items.extend(data)
+            cur = page.get("next_cursor") if isinstance(page, dict) else None
+            if not cur or cur == "LTE=":
+                break
         rows = []
         for m in items:
             if not (m.get("active") and m.get("accepting_orders") and m.get("enable_order_book")):
@@ -325,6 +334,8 @@ def _read_screener():
                 "tags":        m.get("tags") or [],
             })
         rows.sort(key=lambda r: r["rate_day"], reverse=True)
+        global _SCREENER_ALL
+        _SCREENER_ALL = rows
         state["screener"] = rows[:60]
         state["screener_ts"] = datetime.now(timezone.utc).isoformat()
     except Exception:
@@ -773,6 +784,25 @@ async def control_cancel_all(req: Request):
     r = await asyncio.get_event_loop().run_in_executor(None, lambda: _get_clob().cancel_all())
     asyncio.get_event_loop().run_in_executor(None, _read_orders)
     return {"ok": True, "raw": r}
+
+@app.post("/control/abort")
+async def control_abort(req: Request):
+    """PANIC: stop every MM process AND cancel every resting order."""
+    _auth(req)
+    subprocess.run(["pkill", "-f", "mm_gateway.py"])
+    r = await asyncio.get_event_loop().run_in_executor(None, lambda: _get_clob().cancel_all())
+    asyncio.get_event_loop().run_in_executor(None, _read_orders)
+    return {"ok": True, "stopped_mm": True, "cancel_all": r}
+
+@app.get("/search")
+async def search(q: str = ""):
+    """Search the live reward-market universe by question text (read-only, no auth)."""
+    q = (q or "").strip().lower()
+    if not q:
+        return []
+    res = [r for r in _SCREENER_ALL if q in (r.get("question") or "").lower()]
+    res.sort(key=lambda r: r["rate_day"], reverse=True)
+    return res[:80]
 
 @app.post("/control/mm_start")
 async def control_mm_start(req: Request):

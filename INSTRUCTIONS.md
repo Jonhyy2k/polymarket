@@ -235,6 +235,8 @@ cd /home/ubuntu/polymarket/dashboard && ./start.sh    # http://<EC2-ip>:8080
   CLOB, sorted by $/day. Columns: market (full name), YES/NO price, $/day, spread, min,
   **DTE**, tick. **Click any row** to expand details: condition_id, end date + DTE,
   resolution **description/rules**, and a **quick-quote** form (BUY YES/NO at your price/size).
+  **Search bar** — type any market name (Micron, Bitcoin, France…) to search the *full*
+  reward-market universe (~7,300 markets, paginated from the API); Clear returns to the top 60.
 - **PORTFOLIO RISK / SYSTEM** — stress scenarios + feed/process health.
 
 ### Control panel (place/cancel orders + start/stop the MM from the browser)
@@ -248,6 +250,8 @@ Paste it into the CONTROLS box → **Unlock** (stored in your browser). Then you
 - **Cancel ALL** — flatten every resting order.
 - **Start MM / Stop MM** — launch or stop the auto market-maker on a chosen market/size
   (started detached, so it survives a dashboard restart).
+- **⛔ ABORT** — the big red button: **one click stops every MM process AND cancels every
+  resting order** (panic flatten → all cash). Use it if anything looks wrong.
 - **Quick-quote from the screener** — expand any screener row → place a BUY on that exact
   market at your price.
 

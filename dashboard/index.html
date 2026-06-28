@@ -226,11 +226,23 @@
     <button id="c-mmstart" disabled>Start MM</button>
     <button id="c-mmstop" class="danger" disabled>Stop MM</button>
   </div>
+  <div class="ctl-row">
+    <button id="c-abort" disabled
+      style="background:#dc2626;font-size:16px;font-weight:bold;padding:13px 30px;letter-spacing:1px;width:100%;box-shadow:0 0 14px rgba(220,38,38,.55)">
+      ⛔ ABORT — STOP ALL MMs + CANCEL EVERY ORDER
+    </button>
+  </div>
   <div class="ctl-out" id="c-out">—</div>
 </div>
 
 <!-- ── Screener ── -->
 <div class="section-hdr">SCREENER · TOP REWARD MARKETS <span class="sub" id="sc-ts">— · click a row for details &amp; quick-quote</span></div>
+<div style="padding:8px 14px;background:#0a0a0a;border-bottom:1px solid var(--line);display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+  <input id="sc-search" placeholder="🔍 search ALL reward markets via API…  (Micron, Bitcoin, France, election…)" onkeydown="if(event.key==='Enter')scSearch()"
+    style="width:460px;background:#0c1015;color:#cfd6dd;border:1px solid #2a3340;border-radius:4px;padding:8px 11px;font:inherit;font-size:14px"/>
+  <button onclick="scSearch()" style="background:#1d4ed8;color:#fff;border:0;border-radius:4px;padding:8px 16px;font:inherit;font-size:13px;cursor:pointer">Search</button>
+  <button onclick="scClearSearch()" style="background:#2a3340;color:#cfd6dd;border:0;border-radius:4px;padding:8px 16px;font:inherit;font-size:13px;cursor:pointer">Clear</button>
+</div>
 <table>
   <thead><tr>
     <th class="l">#</th><th class="l">MARKET</th><th>YES / NO</th><th>$/DAY</th>
@@ -425,25 +437,45 @@ function render(d){
 }
 
 // ── screener ──
-function renderScreener(d){
-  const sc = d.screener||[]; window.SCREENER = sc;
-  document.getElementById('sc-ts').textContent = sc.length+' reward markets · click a row';
-  const tb = document.getElementById('sctbody');
-  if(!sc.length){ tb.innerHTML='<tr><td colspan="8" class="l dim" style="padding:14px">no reward markets</td></tr>'; return; }
-  tb.innerHTML = sc.map((m,i)=>{
-    const dte = m.dte!=null?(m.dte+'d'):'—';
-    return `<tr class="clickable" onclick="scToggle(${i})">`+
-      `<td class="l dim">${i+1}</td>`+
-      `<td class="l white">${(m.question||'—')}${m.neg_risk?'<span class="dim"> ·neg</span>':''}</td>`+
-      `<td class="num cyan">${fc(m.yes_price)} / ${fc(m.no_price)}</td>`+
-      `<td class="num up">$${m.rate_day}</td>`+
-      `<td class="num">${m.max_spread!=null?m.max_spread+'¢':'—'}</td>`+
-      `<td class="num">${m.min_size??'—'}</td>`+
-      `<td class="num">${dte}</td>`+
-      `<td class="num dim">${m.tick??'—'}</td></tr>`+
-      `<tr class="detail" id="scd-${i}" style="display:none"><td colspan="8"><div class="detail-box" id="scd-box-${i}"></div></td></tr>`;
-  }).join('');
+function scRowHtml(m,i){
+  const dte = m.dte!=null?(m.dte+'d'):'—';
+  return `<tr class="clickable" onclick="scToggle(${i})">`+
+    `<td class="l dim">${i+1}</td>`+
+    `<td class="l white">${(m.question||'—')}${m.neg_risk?'<span class="dim"> ·neg</span>':''}</td>`+
+    `<td class="num cyan">${fc(m.yes_price)} / ${fc(m.no_price)}</td>`+
+    `<td class="num up">$${m.rate_day}</td>`+
+    `<td class="num">${m.max_spread!=null?m.max_spread+'¢':'—'}</td>`+
+    `<td class="num">${m.min_size??'—'}</td>`+
+    `<td class="num">${dte}</td>`+
+    `<td class="num dim">${m.tick??'—'}</td></tr>`+
+    `<tr class="detail" id="scd-${i}" style="display:none"><td colspan="8"><div class="detail-box" id="scd-box-${i}"></div></td></tr>`;
 }
+function renderScreenerRows(list){
+  window.SCREENER = list;
+  const tb = document.getElementById('sctbody');
+  tb.innerHTML = list.length ? list.map(scRowHtml).join('')
+    : '<tr><td colspan="8" class="l dim" style="padding:14px">no markets</td></tr>';
+}
+function renderScreener(d){
+  if(window.SC_SEARCH) return;   // a search view is active — don't clobber it on live updates
+  const sc = d.screener||[];
+  document.getElementById('sc-ts').textContent = sc.length+' reward markets · click a row';
+  renderScreenerRows(sc);
+}
+window.scSearch = async function(){
+  const q = document.getElementById('sc-search').value.trim();
+  if(!q){ window.scClearSearch(); return; }
+  try{
+    const res = await (await fetch('/search?q='+encodeURIComponent(q))).json();
+    window.SC_SEARCH = res; renderScreenerRows(res);
+    document.getElementById('sc-ts').textContent = 'search: '+res.length+' matches for "'+q+'" · click a row · Clear to exit';
+  }catch(e){ document.getElementById('sc-ts').textContent = 'search error'; }
+};
+window.scClearSearch = function(){
+  document.getElementById('sc-search').value='';
+  window.SC_SEARCH = null;
+  if(window.LAST) renderScreener(window.LAST);
+};
 window.scToggle = function(i){
   const row=document.getElementById('scd-'+i); if(!row) return;
   if(row.style.display!=='none'){ row.style.display='none'; return; }
@@ -500,7 +532,7 @@ function drawPnl(){
   if(saved) tokenInput.value=saved;
   window.CTL_TOKEN=saved;
   function setEnabled(on){
-    ['c-place','c-cancel','c-mmstart','c-mmstop'].forEach(id=>document.getElementById(id).disabled=!on);
+    ['c-place','c-cancel','c-mmstart','c-mmstop','c-abort'].forEach(id=>document.getElementById(id).disabled=!on);
     document.getElementById('c-status').innerHTML = on?'<span class="up">● unlocked</span>':'locked — enter token';
   }
   setEnabled(!!saved);
@@ -532,6 +564,7 @@ function drawPnl(){
       size:parseFloat(document.getElementById('c-mmsize').value),
       half_spread:parseFloat(document.getElementById('c-mmhs').value)}); };
   document.getElementById('c-mmstop').onclick=()=>ctlPost('/control/mm_stop',{});
+  document.getElementById('c-abort').onclick=()=>{ if(confirm('⛔ ABORT: stop every market-maker AND cancel every resting order. Continue?')) ctlPost('/control/abort',{}); };
 })();
 
 function connect(){
