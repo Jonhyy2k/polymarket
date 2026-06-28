@@ -214,11 +214,18 @@ Caps: `GW_MAX_ORDER_NOTIONAL` (default $10), `GW_MAX_ORDER_SIZE` (200 shares).
 
 ## 7. Dashboard (monitor + control everything)
 
+**The dashboard auto-starts** — it's a systemd service (`polymarket-dashboard`),
+enabled on boot and auto-restarting on crash. Just open **http://<EC2-ip>:8080**.
 ```bash
-cd /home/ubuntu/polymarket/dashboard && ./start.sh    # http://<EC2-ip>:8080
+sudo systemctl status  polymarket-dashboard     # is it up?
+sudo systemctl restart polymarket-dashboard     # after editing dashboard code
+sudo systemctl stop    polymarket-dashboard     # stop serving
+journalctl -u polymarket-dashboard -f           # live logs
+# (manual alt, if ever needed:  cd /home/ubuntu/polymarket/dashboard && ./start.sh)
 ```
 > Open **TCP 8080 → Source: My IP** in the EC2 security group (the dashboard has no
 > login; restrict it to your IP). Instance `i-0b579563952ae62b1`, SG `launch-wizard-2`.
+> The control token lives in `dashboard/dashboard.env` (pinned for the service).
 
 **Panels:**
 - **KPI strip** — *Invested $* (actual resting-order notional, **not** a hypothetical),

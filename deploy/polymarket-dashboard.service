@@ -1,0 +1,16 @@
+[Unit]
+Description=Polymarket LP Dashboard
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/polymarket
+EnvironmentFile=/home/ubuntu/polymarket/dashboard/dashboard.env
+ExecStart=/usr/bin/python3 -m uvicorn dashboard.server:app --host 0.0.0.0 --port 8080 --log-level warning
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
