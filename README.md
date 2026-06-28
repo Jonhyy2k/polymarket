@@ -128,6 +128,19 @@ real SELL would need it). post-only ⇒ never crosses, never pays taker.
 > dead-man's-switch, and a default-off arm latch (`--live` / `live_arm`). Key + L2
 > secret are chmod-600 files outside the repo, never logged or committed.
 
+### Live dashboard (`dashboard/start.sh` → `:8080`)
+A monitor + control terminal (full details in [INSTRUCTIONS.md](INSTRUCTIONS.md) §7):
+- **Real** capital/PnL: *Invested $* (actual resting notional), *Earned Today* (real
+  rewards — click for a chart), deposit-wallet pUSD + gas POL.
+- **Open Orders** (what you're invested in) and **Rewards** metrics per traded market
+  (max spread, min size, $/day, **DTE**, competition, earned, ▲BUFFED/▼NERFED).
+- **Screener** — top 60 reward markets live from the CLOB (name, price, $/day, spread,
+  min, DTE); click a row for resolution rules + a quick-quote form.
+- **Controls** — token-protected (`dashboard/.control_token`): place/cancel orders
+  (post-only, capped) and start/stop the MM from the browser.
+> No auth on the page itself — restrict SG **TCP 8080 to your IP**; the control token
+> gates execution (and can't withdraw — orders are post-only + capped).
+
 ---
 
 ## Quick start

@@ -24,7 +24,7 @@
     margin: 0; padding: 0;
     background: var(--bg); color: var(--txt);
     font-family: 'Consolas','SF Mono','DejaVu Sans Mono','Menlo',monospace;
-    font-size: 12px; line-height: 1.35;
+    font-size: 14.5px; line-height: 1.5;
     -webkit-font-smoothing: none;
   }
   .num { font-variant-numeric: tabular-nums; }
@@ -56,46 +56,63 @@
   .wrap { padding: 0; }
   .section-hdr {
     color: var(--amber); background: var(--panel);
-    padding: 3px 10px; border-bottom: 1px solid var(--line);
+    padding: 8px 14px; border-bottom: 1px solid var(--line);
     border-top: 1px solid var(--line);
-    font-weight: bold; letter-spacing: 1px; text-transform: uppercase;
-    display: flex; justify-content: space-between;
+    font-weight: bold; letter-spacing: 1px; text-transform: uppercase; font-size: 14px;
+    display: flex; justify-content: space-between; align-items: baseline;
   }
-  .section-hdr .sub { color: var(--dim); font-weight: normal; letter-spacing: 0; }
+  .section-hdr .sub { color: var(--dim); font-weight: normal; letter-spacing: 0; font-size: 12px; }
 
   /* ── Table ── */
   table { width: 100%; border-collapse: collapse; }
   thead th {
     color: var(--dim); text-align: right; font-weight: normal;
-    padding: 3px 10px; border-bottom: 1px solid var(--line);
-    text-transform: uppercase; font-size: 11px; letter-spacing: .5px;
+    padding: 7px 14px; border-bottom: 1px solid var(--line);
+    text-transform: uppercase; font-size: 12px; letter-spacing: .5px;
     white-space: nowrap; background: var(--bg);
   }
   thead th.l { text-align: left; }
   tbody td {
-    text-align: right; padding: 2px 10px; white-space: nowrap;
+    text-align: right; padding: 6px 14px; white-space: nowrap;
     border-bottom: 1px solid #0e0e0e;
   }
   tbody td.l { text-align: left; }
   tbody tr:hover { background: #0d0d0d; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover { background: #14181f; }
+  tr.detail td { background: #0b0e13; white-space: normal; }
+  .detail-box { padding: 6px 4px; line-height: 1.6; }
+  .detail-box .desc { color: var(--txt); max-width: 980px; margin: 6px 0; }
+  .detail-box .meta { color: var(--dim); }
+  .detail-box code { color: var(--cyan); font-size: 12px; }
 
   /* ── Risk grid ── */
   .riskgrid {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(195px, 1fr));
     gap: 0;
   }
   .riskcell {
     border-right: 1px solid var(--line); border-bottom: 1px solid var(--line);
-    padding: 6px 10px;
+    padding: 12px 16px;
   }
-  .riskcell .lbl { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing:.5px; }
-  .riskcell .val { font-size: 17px; margin-top: 2px; }
-  .riskcell .sub { color: var(--dimmer); font-size: 10px; margin-top: 1px; }
+  .riskcell.click { cursor: pointer; }
+  .riskcell.click:hover { background: #11151b; }
+  .riskcell .lbl { color: var(--dim); font-size: 12px; text-transform: uppercase; letter-spacing:.5px; }
+  .riskcell .val { font-size: 26px; margin-top: 4px; }
+  .riskcell .sub { color: var(--dimmer); font-size: 11px; margin-top: 3px; }
 
-  .kv { display:flex; justify-content:space-between; padding: 2px 10px; border-bottom:1px solid #0e0e0e; }
+  .kv { display:flex; justify-content:space-between; padding: 4px 14px; border-bottom:1px solid #0e0e0e; }
   .kv .k { color: var(--dim); }
 
-  .foot { color: var(--dimmer); font-size: 10px; padding: 6px 10px; }
+  .foot { color: var(--dimmer); font-size: 12px; padding: 10px 14px; }
+
+  /* ── Modal (PnL chart) ── */
+  .modal-bg { position:fixed; inset:0; background:rgba(0,0,0,.78); display:none; align-items:center; justify-content:center; z-index:50; }
+  .modal-bg.show { display:flex; }
+  .modal { background:#0a0d12; border:1px solid var(--amberdim); border-radius:6px; padding:16px; width:min(880px,92vw); }
+  .modal h3 { color:var(--amber); margin:0 0 10px; font-size:15px; letter-spacing:1px; }
+  .modal .x { float:right; cursor:pointer; color:var(--dim); }
+  .modal .x:hover { color:var(--white); }
   .blink-flash { animation: flash .6s ease; }
   @keyframes flash { 0% { background:#1a1206; } 100% { background:transparent; } }
 </style>
@@ -118,8 +135,8 @@
 
 <!-- ── Top KPI strip ── -->
 <div class="riskgrid" id="kpi">
-  <div class="riskcell"><div class="lbl">Gross Notional</div><div class="val white num" id="k-aum">—</div><div class="sub" id="k-aum-sub">—</div></div>
-  <div class="riskcell"><div class="lbl">Est Reward / Day</div><div class="val up num" id="k-rew">—</div><div class="sub" id="k-pool">—</div></div>
+  <div class="riskcell"><div class="lbl">Invested $</div><div class="val white num" id="k-aum">—</div><div class="sub" id="k-aum-sub">resting orders</div></div>
+  <div class="riskcell click" onclick="openPnl()"><div class="lbl">Earned Today ▸ chart</div><div class="val up num" id="k-rew">—</div><div class="sub" id="k-pool">live rewards (USDC.e)</div></div>
   <div class="riskcell"><div class="lbl">Net Delta $</div><div class="val num" id="k-delta">—</div><div class="sub">directional exposure</div></div>
   <div class="riskcell"><div class="lbl">Max Loss</div><div class="val down num" id="k-maxloss">—</div><div class="sub">all positions → 0</div></div>
   <div class="riskcell"><div class="lbl">VaR 95% 1d</div><div class="val amber num" id="k-var">—</div><div class="sub" id="k-var-sub">—</div></div>
@@ -154,6 +171,74 @@
   </tbody>
 </table>
 
+<!-- ── Open orders ── -->
+<div class="section-hdr">OPEN ORDERS <span class="sub" id="oo-ts">— · all cash</span></div>
+<table>
+  <thead><tr><th class="l">MARKET</th><th>OUTCOME</th><th>SIDE</th><th>PRICE</th><th>SIZE</th><th>$ NOTIONAL</th></tr></thead>
+  <tbody id="ootbody">
+    <tr><td colspan="6" class="l dim" style="padding:14px 10px">no resting orders — money is all cash in the deposit wallet</td></tr>
+  </tbody>
+</table>
+
+<!-- ── Rewards ── -->
+<div class="section-hdr">REWARDS <span class="sub" id="rw-ts">— · earned today —</span></div>
+<table>
+  <thead><tr>
+    <th class="l">MARKET</th><th>PRICE Y/N</th><th>MAX SPR</th><th>MIN</th>
+    <th>$/DAY</th><th>DTE</th><th>COMPETITION</th><th>EARNED TODAY</th><th>RATE Δ</th>
+  </tr></thead>
+  <tbody id="rwtbody"><tr><td colspan="9" class="l dim" style="padding:14px 10px">loading reward config…</td></tr></tbody>
+</table>
+
+<!-- ── Controls ── -->
+<style>
+  .controls{background:#11161d;border:1px solid #1f2730;border-radius:6px;padding:12px;margin:4px 0 10px}
+  .ctl-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  .controls input,.controls select,.detail-box input,.detail-box select{background:#0c1015;color:#cfd6dd;border:1px solid #2a3340;border-radius:4px;padding:6px 8px;font:inherit;font-size:13px}
+  .controls input[type=number]{width:90px}
+  .controls button,.detail-box button{background:#1d4ed8;color:#fff;border:0;border-radius:4px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer}
+  .controls button:hover,.detail-box button:hover{filter:brightness(1.15)}
+  .controls button.danger{background:#b91c1c}
+  .controls button:disabled{opacity:.4;cursor:not-allowed}
+  .ctl-out{font-family:monospace;font-size:11px;color:#8b97a3;white-space:pre-wrap;margin-top:6px;max-height:80px;overflow:auto}
+</style>
+<div class="section-hdr">CONTROLS <span class="sub">token-protected · orders are POST-ONLY &amp; capped ≤$19</span></div>
+<div class="controls">
+  <div class="ctl-row">
+    <input id="c-token" type="password" placeholder="control token (see dashboard log / .control_token)" style="width:330px"/>
+    <button id="c-save">Unlock</button>
+    <span class="sub" id="c-status">locked — enter token</span>
+  </div>
+  <div class="ctl-row">
+    <select id="c-market"></select>
+    <select id="c-outcome"><option value="yes">YES</option><option value="no">NO</option></select>
+    <select id="c-side"><option>BUY</option><option>SELL</option></select>
+    <input id="c-price" type="number" step="0.01" min="0.01" max="0.99" placeholder="price"/>
+    <input id="c-size" type="number" step="1" min="1" placeholder="shares" value="20"/>
+    <button id="c-place" disabled>Place order</button>
+    <button id="c-cancel" class="danger" disabled>Cancel ALL</button>
+  </div>
+  <div class="ctl-row">
+    <span class="sub">Auto market-maker:</span>
+    <select id="c-mmmkt"></select>
+    <span class="sub">size</span><input id="c-mmsize" type="number" value="20"/>
+    <span class="sub">half-spread</span><input id="c-mmhs" type="number" step="0.01" value="0.02"/>
+    <button id="c-mmstart" disabled>Start MM</button>
+    <button id="c-mmstop" class="danger" disabled>Stop MM</button>
+  </div>
+  <div class="ctl-out" id="c-out">—</div>
+</div>
+
+<!-- ── Screener ── -->
+<div class="section-hdr">SCREENER · TOP REWARD MARKETS <span class="sub" id="sc-ts">— · click a row for details &amp; quick-quote</span></div>
+<table>
+  <thead><tr>
+    <th class="l">#</th><th class="l">MARKET</th><th>YES / NO</th><th>$/DAY</th>
+    <th>SPREAD</th><th>MIN</th><th>DTE</th><th>TICK</th>
+  </tr></thead>
+  <tbody id="sctbody"><tr><td colspan="8" class="l dim" style="padding:14px">loading screener…</td></tr></tbody>
+</table>
+
 <!-- ── Risk ── -->
 <div class="section-hdr">PORTFOLIO RISK <span class="sub">binary-outcome stress models</span></div>
 <div class="riskgrid">
@@ -179,6 +264,16 @@
   Est rewards assume 1% field Qmin share (conservative, unverified). Δ/HI/LO are since dashboard start.
 </div>
 
+<!-- ── PnL chart modal ── -->
+<div class="modal-bg" id="pnl-modal" onclick="if(event.target===this)this.classList.remove('show')">
+  <div class="modal">
+    <span class="x" onclick="document.getElementById('pnl-modal').classList.remove('show')">✕ close</span>
+    <h3>REWARDS EARNED TODAY — cumulative (USDC.e)</h3>
+    <canvas id="pnl-canvas" width="840" height="320"></canvas>
+    <div class="sub dim" id="pnl-cap" style="padding-top:8px"></div>
+  </div>
+</div>
+
 <script>
 const COL = ['#ff9e1b','#3fc1c9','#2ecc71','#b388ff','#ff6e9c','#9aa0a6'];
 function fc(v){ if(v==null) return '—'; return (v*100).toFixed(1)+'¢'; }
@@ -188,6 +283,7 @@ function cls(v){ return v>0?'up':v<0?'down':'flat'; }
 const prev = {};
 
 function render(d){
+  window.LAST = d;
   document.getElementById('t-clock').textContent = new Date(d.ts).toLocaleTimeString('en-GB');
   const mode = document.getElementById('mode');
   mode.textContent = (d.exec_mode||'—').toUpperCase();
@@ -200,11 +296,21 @@ function render(d){
   document.getElementById('k-pusd').textContent = w.pusd!=null ? w.pusd.toFixed(2) : '—';
   document.getElementById('k-pol').textContent  = w.pol!=null ? w.pol.toFixed(2) : '—';
 
+  const oo = d.open_orders||[];
+  document.getElementById('oo-ts').textContent = oo.length
+      ? (oo.length+' resting · invested '+fd(d.invested_usd||0))
+      : 'all cash · invested $0.00';
+  const oot = document.getElementById('ootbody');
+  oot.innerHTML = oo.length
+      ? oo.map(o=>`<tr><td class="l">${o.market}</td><td>${o.outcome}</td>`+
+          `<td class="${o.side==='BUY'?'up':'down'}">${o.side}</td>`+
+          `<td>${fc(o.price)}</td><td>${o.size}</td><td>${fd(o.price*o.size)}</td></tr>`).join('')
+      : '<tr><td colspan="6" class="l dim" style="padding:14px 10px">no resting orders — money is all cash in the deposit wallet</td></tr>';
+
   const r = d.risk||{};
-  document.getElementById('k-aum').textContent = fd(r.gross_notional);
-  document.getElementById('k-aum-sub').textContent = d.exec_mode==='live'?'real capital':'hypothetical';
-  document.getElementById('k-rew').textContent = fd(r.est_reward_day);
-  document.getElementById('k-pool').textContent = 'pool $'+(r.total_pool||0).toLocaleString()+'/d';
+  document.getElementById('k-aum').textContent = fd(d.invested_usd||0);
+  document.getElementById('k-aum-sub').textContent = (d.open_orders||[]).length+' resting orders';
+  document.getElementById('k-rew').textContent = fd(d.earnings_today||0, 4);
   const kd = document.getElementById('k-delta');
   kd.textContent = fd(r.net_delta); kd.className = 'val num '+cls(r.net_delta);
   document.getElementById('k-maxloss').textContent = fd(r.max_loss);
@@ -250,6 +356,47 @@ function render(d){
   document.getElementById('mtbody').innerHTML = rows.join('') ||
     '<tr><td colspan="14" class="l dim">no data</td></tr>';
 
+  // rewards table (Polymarket rewards-page metrics)
+  const rw = d.rewards||{};
+  document.getElementById('rw-ts').textContent = 'earned today '+fd(d.earnings_today||0,4);
+  function compLabel(c){
+    if(c==null) return '<span class="dim">—</span>';
+    const lvl = c<0.1?['LOW','up']:c<0.4?['MED','amber']:['HIGH','down'];
+    return `<span class="${lvl[1]}">${lvl[0]}</span> <span class="dim">${c.toFixed(3)}</span>`;
+  }
+  function bnLabel(b){
+    if(b==='BUFFED') return '<span class="up">▲ BUFFED</span>';
+    if(b==='NERFED') return '<span class="down">▼ NERFED</span>';
+    if(b==='flat')   return '<span class="dim">flat</span>';
+    return '<span class="dim">—</span>';
+  }
+  const dteByCid = {}; (d.screener||[]).forEach(s=>{ dteByCid[s.condition_id]=s.dte; });
+  document.getElementById('rwtbody').innerHTML = mkts.map(m=>{
+    const r = rw[m.condition_id];
+    if(!r) return `<tr><td class="l white">${m.display}</td><td colspan="8" class="dim l">no reward config</td></tr>`;
+    const dte = dteByCid[m.condition_id];
+    return `<tr><td class="l white">${m.display}</td>`+
+      `<td class="num cyan">${fc(r.yes_price)} / ${fc(r.no_price)}</td>`+
+      `<td class="num">${r.max_spread!=null?r.max_spread+'¢':'—'}</td>`+
+      `<td class="num">${r.min_size??'—'}</td>`+
+      `<td class="num up">$${r.rate_day??'—'}</td>`+
+      `<td class="num">${dte!=null?dte+'d':'—'}</td>`+
+      `<td>${compLabel(r.competitiveness)}</td>`+
+      `<td class="num up">${fd(r.earnings||0,4)}</td>`+
+      `<td>${bnLabel(r.buff_nerf)}</td></tr>`;
+  }).join('') || '<tr><td colspan="9" class="dim l">no markets</td></tr>';
+
+  renderScreener(d);
+
+  // populate control dropdowns once markets arrive
+  window.MKTS = mkts;
+  if(!window.CTL_DD && mkts.length){
+    window.CTL_DD = true;
+    const opt = mkts.map(m=>`<option value="${m.idx}">${m.display}</option>`).join('');
+    document.getElementById('c-market').innerHTML = opt;
+    document.getElementById('c-mmmkt').innerHTML = opt;
+  }
+
   // risk panel
   document.getElementById('s-goal').textContent = fd(r.stress_one_goal);
   document.getElementById('s-out').textContent = fd(r.stress_all_out);
@@ -276,6 +423,116 @@ function render(d){
     ? 'LIVE — positions and P&L reflect real fills. '
     : 'MOCKLIVE — gross notional hypothetical (no orders placed), P&L $0 until exec_mode=live. ';
 }
+
+// ── screener ──
+function renderScreener(d){
+  const sc = d.screener||[]; window.SCREENER = sc;
+  document.getElementById('sc-ts').textContent = sc.length+' reward markets · click a row';
+  const tb = document.getElementById('sctbody');
+  if(!sc.length){ tb.innerHTML='<tr><td colspan="8" class="l dim" style="padding:14px">no reward markets</td></tr>'; return; }
+  tb.innerHTML = sc.map((m,i)=>{
+    const dte = m.dte!=null?(m.dte+'d'):'—';
+    return `<tr class="clickable" onclick="scToggle(${i})">`+
+      `<td class="l dim">${i+1}</td>`+
+      `<td class="l white">${(m.question||'—')}${m.neg_risk?'<span class="dim"> ·neg</span>':''}</td>`+
+      `<td class="num cyan">${fc(m.yes_price)} / ${fc(m.no_price)}</td>`+
+      `<td class="num up">$${m.rate_day}</td>`+
+      `<td class="num">${m.max_spread!=null?m.max_spread+'¢':'—'}</td>`+
+      `<td class="num">${m.min_size??'—'}</td>`+
+      `<td class="num">${dte}</td>`+
+      `<td class="num dim">${m.tick??'—'}</td></tr>`+
+      `<tr class="detail" id="scd-${i}" style="display:none"><td colspan="8"><div class="detail-box" id="scd-box-${i}"></div></td></tr>`;
+  }).join('');
+}
+window.scToggle = function(i){
+  const row=document.getElementById('scd-'+i); if(!row) return;
+  if(row.style.display!=='none'){ row.style.display='none'; return; }
+  row.style.display='';
+  const m=(window.SCREENER||[])[i]; if(!m) return;
+  const end=m.end_date?new Date(m.end_date).toLocaleString('en-GB'):'—';
+  document.getElementById('scd-box-'+i).innerHTML =
+    `<div class="meta">CONDITION <code>${m.condition_id}</code></div>`+
+    `<div class="meta">END ${end} · DTE ${m.dte!=null?m.dte+' days':'—'} · TICK ${m.tick} · MIN ${m.min_size} sh · MAX SPREAD ${m.max_spread}¢ · $${m.rate_day}/day · slug <code>${m.slug||'—'}</code></div>`+
+    `<div class="desc">${(m.description||'no description / resolution rules').replace(/</g,'&lt;')}</div>`+
+    `<div class="meta" style="margin-top:8px">QUICK-QUOTE (BUY, post-only, capped ≤$19 — unlock the control token first):</div>`+
+    `<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">`+
+      `<select id="sq-out-${i}"><option value="yes">YES</option><option value="no">NO</option></select>`+
+      `<input id="sq-price-${i}" type="number" step="0.01" placeholder="price" style="width:96px"/>`+
+      `<input id="sq-size-${i}" type="number" value="${m.min_size||20}" style="width:96px"/>`+
+      `<button onclick="scQuote(${i})">Place BUY</button>`+
+    `</div>`;
+};
+window.scQuote = function(i){
+  const m=(window.SCREENER||[])[i]; if(!m) return;
+  if(!window.ctlPost){ alert('Unlock the control token in the CONTROLS panel first.'); return; }
+  const out=document.getElementById('sq-out-'+i).value;
+  window.ctlPost('/control/place',{token_id: out==='yes'?m.yes_token:m.no_token, side:'BUY',
+    price:parseFloat(document.getElementById('sq-price-'+i).value),
+    size:parseFloat(document.getElementById('sq-size-'+i).value)});
+};
+
+// ── PnL / earnings chart ──
+window.openPnl = function(){ document.getElementById('pnl-modal').classList.add('show'); drawPnl(); };
+function drawPnl(){
+  const d=window.LAST||{}, h=d.pnl_hist||[];
+  const cv=document.getElementById('pnl-canvas'), ctx=cv.getContext('2d');
+  const W=cv.width,H=cv.height,pad=46;
+  ctx.fillStyle='#0a0d12'; ctx.fillRect(0,0,W,H);
+  document.getElementById('pnl-cap').textContent='earned today '+fd(d.earnings_today||0,4)+(h.length?(' · '+h.length+' samples'):'');
+  if(h.length<2){ ctx.fillStyle='#6a6a6a'; ctx.font='14px monospace'; ctx.fillText('collecting data… (samples every 30s)',pad,H/2); return; }
+  const ys=h.map(p=>p.earn), xs=h.map(p=>p.t);
+  const ymax=Math.max(...ys)*1.15||1, xmin=xs[0], xmax=xs[xs.length-1]||xmin+1;
+  const X=t=>pad+(t-xmin)/(xmax-xmin||1)*(W-2*pad), Y=v=>H-pad-(v/ymax)*(H-2*pad);
+  ctx.fillStyle='#6a6a6a'; ctx.font='11px monospace';
+  for(let g=0;g<=4;g++){ const v=ymax*g/4,y=Y(v); ctx.fillText('$'+v.toFixed(3),4,y+4);
+    ctx.strokeStyle='#111'; ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(W-pad,y); ctx.stroke(); }
+  ctx.strokeStyle='#2ecc71'; ctx.lineWidth=2; ctx.beginPath();
+  h.forEach((p,i)=>{ const x=X(p.t),y=Y(p.earn); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke();
+  ctx.fillStyle='#6a6a6a';
+  ctx.fillText(new Date(xmin*1000).toLocaleTimeString('en-GB'),pad,H-pad+18);
+  ctx.fillText(new Date(xmax*1000).toLocaleTimeString('en-GB'),W-pad-58,H-pad+18);
+}
+
+// ── control panel ──
+(function(){
+  const tokenInput=document.getElementById('c-token');
+  const saved=localStorage.getItem('ctlToken')||'';
+  if(saved) tokenInput.value=saved;
+  window.CTL_TOKEN=saved;
+  function setEnabled(on){
+    ['c-place','c-cancel','c-mmstart','c-mmstop'].forEach(id=>document.getElementById(id).disabled=!on);
+    document.getElementById('c-status').innerHTML = on?'<span class="up">● unlocked</span>':'locked — enter token';
+  }
+  setEnabled(!!saved);
+  document.getElementById('c-save').onclick=()=>{
+    window.CTL_TOKEN=tokenInput.value.trim();
+    localStorage.setItem('ctlToken',window.CTL_TOKEN);
+    setEnabled(!!window.CTL_TOKEN);
+  };
+  async function ctlPost(path,body){
+    try{
+      const res=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json','X-Control-Token':window.CTL_TOKEN||''},body:JSON.stringify(body||{})});
+      const j=await res.json().catch(()=>({status:res.status}));
+      document.getElementById('c-out').textContent=new Date().toLocaleTimeString('en-GB')+'  '+path.replace('/control/','')+' → '+JSON.stringify(j);
+      return j;
+    }catch(e){ document.getElementById('c-out').textContent='ERROR '+e; }
+  }
+  window.ctlPost = ctlPost;
+  document.getElementById('c-place').onclick=()=>{
+    const m=(window.MKTS||[])[+document.getElementById('c-market').value]; if(!m) return;
+    const outcome=document.getElementById('c-outcome').value;
+    ctlPost('/control/place',{token_id: outcome==='yes'?m.yes_token:m.no_token,
+      side:document.getElementById('c-side').value,
+      price:parseFloat(document.getElementById('c-price').value),
+      size:parseFloat(document.getElementById('c-size').value)});
+  };
+  document.getElementById('c-cancel').onclick=()=>{ if(confirm('Cancel ALL resting orders?')) ctlPost('/control/cancel_all',{}); };
+  document.getElementById('c-mmstart').onclick=()=>{ if(confirm('Start the auto market-maker on the selected market?'))
+    ctlPost('/control/mm_start',{contract:+document.getElementById('c-mmmkt').value,
+      size:parseFloat(document.getElementById('c-mmsize').value),
+      half_spread:parseFloat(document.getElementById('c-mmhs').value)}); };
+  document.getElementById('c-mmstop').onclick=()=>ctlPost('/control/mm_stop',{});
+})();
 
 function connect(){
   const ws = new WebSocket(`ws://${location.host}/ws`);

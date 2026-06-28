@@ -12,7 +12,7 @@ Run:
   (from /home/ubuntu/polymarket/)
 """
 
-import asyncio, json, math, os, re, time, csv
+import asyncio, json, math, os, re, sys, time, csv
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 from pathlib import Path
@@ -20,8 +20,9 @@ from typing import Dict, List, Optional, Set
 import urllib.request
 import urllib.error
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request, HTTPException
 from fastapi.responses import HTMLResponse
+import secrets, subprocess
 
 # ─── Paths ────────────────────────────────────────────────────────────────────
 BASE_DIR   = Path(__file__).parent.parent
@@ -113,12 +114,27 @@ state = {
     "pusd":             None,
     "pol":              None,
     "wallet_ts":        None,
+    # live resting orders (what the money is invested in)
+    "open_orders":      [],
+    "invested_usd":     0.0,
+    "orders_ts":        None,
+    # reward-program metrics per market + actual earnings
+    "rewards":          {},
+    "earnings_today":   0.0,
+    "rewards_ts":       None,
+    # live market screener (top reward markets) + PnL/earnings time series
+    "screener":         [],
+    "screener_ts":      None,
+    "pnl_hist":         deque(maxlen=500),
 }
 
 _clients: Set[WebSocket] = set()
 
 # ─── On-chain wallet snapshot (collateral + gas) ──────────────────────────────
-WALLET_ADDR = "0x4E3b143938947039b2F0b13BD1038683DE57851F"
+# Funds live in the DEPOSIT WALLET (the maker); gas (POL) lives on the owner EOA.
+EOA_ADDR       = "0x4E3b143938947039b2F0b13BD1038683DE57851F"   # owner/signer, holds gas
+DEPOSIT_WALLET = "0x832317706479bb6762741B9b9ba568bb86fFfFF0"   # maker, holds pUSD collateral
+WALLET_ADDR    = DEPOSIT_WALLET                                  # the address shown on the dashboard
 PUSD_TOKEN  = "0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB"
 POLYGON_RPC = "https://polygon-bor-rpc.publicnode.com"
 
@@ -131,9 +147,9 @@ def _rpc(method: str, params: list):
 
 def _read_wallet():
     try:
-        d = "0x70a08231" + "0" * 24 + WALLET_ADDR[2:].lower()
-        pusd = _rpc("eth_call", [{"to": PUSD_TOKEN, "data": d}, "latest"])
-        pol = _rpc("eth_getBalance", [WALLET_ADDR, "latest"])
+        d = "0x70a08231" + "0" * 24 + DEPOSIT_WALLET[2:].lower()
+        pusd = _rpc("eth_call", [{"to": PUSD_TOKEN, "data": d}, "latest"])   # collateral in the deposit wallet
+        pol = _rpc("eth_getBalance", [EOA_ADDR, "latest"])                   # gas on the owner EOA
         state["pusd"] = int(pusd, 16) / 1e6 if pusd and pusd != "0x" else None
         state["pol"] = int(pol, 16) / 1e18 if pol else None
         state["wallet_ts"] = datetime.now(timezone.utc).isoformat()
@@ -144,6 +160,180 @@ async def _poll_wallet():
     while True:
         await asyncio.get_event_loop().run_in_executor(None, _read_wallet)
         await asyncio.sleep(30)
+
+# ─── Live open orders (what the money is actually invested in) ─────────────────
+# Polls the CLOB for resting orders on the deposit wallet via py-clob-client-v2.
+sys.path.insert(0, str(BASE_DIR / ".pmlibs"))
+_clob_client = None
+
+def _creds_env(path="/home/ubuntu/.pm_creds.env"):
+    o = {}
+    try:
+        for ln in open(path):
+            ln = ln.strip()
+            if ln.startswith("export "):
+                ln = ln[7:]
+            if "=" in ln and not ln.startswith("#"):
+                k, v = ln.split("=", 1)
+                o[k.strip()] = v.strip().strip('"').strip("'")
+    except Exception:
+        pass
+    return o
+
+def _token_label(asset_id: str):
+    for m in MARKETS:
+        if asset_id == m.get("yes_token"): return m["name"][:28], "YES"
+        if asset_id == m.get("no_token"):  return m["name"][:28], "NO"
+    return "…" + str(asset_id)[-6:], "?"
+
+def _get_clob():
+    global _clob_client
+    if _clob_client is None:
+        from py_clob_client_v2 import ClobClient, ApiCreds
+        e = _creds_env(); key = open("/home/ubuntu/.pm_signer_key").read().strip()
+        _clob_client = ClobClient(host=CLOB_BASE, chain_id=137, key=key,
+                                  creds=ApiCreds(e["PM_API_KEY"], e["PM_API_SECRET"], e["PM_API_PASSPHRASE"]),
+                                  signature_type=3, funder=DEPOSIT_WALLET)
+    return _clob_client
+
+def _read_orders():
+    try:
+        oo = _get_clob().get_open_orders() or []
+        rows, invested = [], 0.0
+        for o in oo:
+            name, outcome = _token_label(o.get("asset_id", ""))
+            price = float(o.get("price", 0)); size = float(o.get("original_size", 0))
+            invested += price * size
+            rows.append({"market": name, "outcome": outcome, "side": o.get("side"),
+                         "price": price, "size": size})
+        state["open_orders"] = rows
+        state["invested_usd"] = round(invested, 2)
+        state["orders_ts"] = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        pass
+
+async def _poll_orders():
+    while True:
+        await asyncio.get_event_loop().run_in_executor(None, _read_orders)
+        await asyncio.sleep(10)
+
+# ─── Reward-program metrics (the Polymarket "Rewards" page, per market) ────────
+# max_spread, min_size, $/day rate, competition (market_competitiveness),
+# current price, your actual earnings today, and a buffed/nerfed flag derived by
+# tracking each market's rate_per_day across polls.
+_rate_hist: Dict[str, float] = {}
+
+def _read_rewards():
+    try:
+        c = _get_clob()
+        import datetime
+        day = datetime.date.today().isoformat()
+        earn = {}
+        try:
+            for e in (c.get_earnings_for_user_for_day(day) or []):
+                earn[e.get("condition_id")] = earn.get(e.get("condition_id"), 0.0) + float(e.get("earnings", 0) or 0)
+        except Exception:
+            pass
+        rw, total = {}, 0.0
+        for m in MARKETS:
+            cid = m["condition_id"]
+            try:
+                raw = c.get_raw_rewards_for_market(cid) or []
+            except Exception:
+                raw = []
+            if not raw:
+                continue
+            r = raw[0]
+            cfg = (r.get("rewards_config") or [{}])[0]
+            rate = cfg.get("rate_per_day")
+            prev = _rate_hist.get(cid)
+            bn = "—"
+            if prev is not None and rate is not None:
+                bn = "BUFFED" if rate > prev else "NERFED" if rate < prev else "flat"
+            if rate is not None:
+                _rate_hist[cid] = rate
+            toks = {t.get("outcome", "").lower(): t.get("price") for t in r.get("tokens", [])}
+            e = float(earn.get(cid, 0.0)); total += e
+            rw[cid] = {
+                "max_spread":      r.get("rewards_max_spread"),
+                "min_size":        r.get("rewards_min_size"),
+                "rate_day":        rate,
+                "competitiveness": r.get("market_competitiveness"),
+                "yes_price":       toks.get("yes"),
+                "no_price":        toks.get("no"),
+                "earnings":        round(e, 4),
+                "buff_nerf":       bn,
+            }
+        state["rewards"] = rw
+        state["earnings_today"] = round(total, 4)
+        state["rewards_ts"] = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        pass
+
+async def _poll_rewards():
+    while True:
+        await asyncio.get_event_loop().run_in_executor(None, _read_rewards)
+        # sample the reward-earnings time series for the PnL chart
+        try:
+            import time as _t
+            state["pnl_hist"].append({"t": int(_t.time()), "earn": state.get("earnings_today", 0.0)})
+        except Exception:
+            pass
+        await asyncio.sleep(30)
+
+# ─── Market screener: top reward markets pulled live from the CLOB ─────────────
+def _dte(iso):
+    if not iso:
+        return None
+    try:
+        import datetime
+        end = datetime.datetime.fromisoformat(iso.replace("Z", "+00:00"))
+        return (end - datetime.datetime.now(datetime.timezone.utc)).days
+    except Exception:
+        return None
+
+def _read_screener():
+    try:
+        sm = _get_clob().get_sampling_markets()
+        items = sm.get("data", sm) if isinstance(sm, dict) else sm
+        rows = []
+        for m in items:
+            if not (m.get("active") and m.get("accepting_orders") and m.get("enable_order_book")):
+                continue
+            rw = m.get("rewards") or {}
+            rate = sum(float(r.get("rewards_daily_rate", 0) or 0) for r in (rw.get("rates") or []))
+            if rate <= 0:
+                continue
+            toks = {t.get("outcome", "").lower(): t for t in m.get("tokens", [])}
+            yes, no = toks.get("yes", {}), toks.get("no", {})
+            rows.append({
+                "question":    m.get("question"),
+                "condition_id": m.get("condition_id"),
+                "slug":        m.get("market_slug"),
+                "rate_day":    round(rate, 2),
+                "max_spread":  rw.get("max_spread"),
+                "min_size":    rw.get("min_size"),
+                "yes_price":   yes.get("price"),
+                "no_price":    no.get("price"),
+                "yes_token":   yes.get("token_id"),
+                "no_token":    no.get("token_id"),
+                "neg_risk":    m.get("neg_risk"),
+                "tick":        m.get("minimum_tick_size"),
+                "dte":         _dte(m.get("end_date_iso")),
+                "end_date":    m.get("end_date_iso"),
+                "description": (m.get("description") or "")[:700],
+                "tags":        m.get("tags") or [],
+            })
+        rows.sort(key=lambda r: r["rate_day"], reverse=True)
+        state["screener"] = rows[:60]
+        state["screener_ts"] = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        pass
+
+async def _poll_screener():
+    while True:
+        await asyncio.get_event_loop().run_in_executor(None, _read_screener)
+        await asyncio.sleep(60)
 
 # ─── REST price fetch ─────────────────────────────────────────────────────────
 def _fetch_book(token_id: str) -> Optional[Dict]:
@@ -477,6 +667,11 @@ def _build_payload() -> Dict:
             "no_at_risk":  m["no_at_risk"],
             "pool":        m["pool"],
             "neg_risk":    m["neg_risk"],
+            "condition_id":m["condition_id"],
+            "name":        m["name"],
+            "yes_token":   m["yes_token"],
+            "no_token":    m["no_token"],
+            "idx":         MARKETS.index(m),
         })
 
     risk = _compute_risk()
@@ -498,6 +693,12 @@ def _build_payload() -> Dict:
             "pol":     state["pol"],
             "ts":      state["wallet_ts"],
         },
+        "open_orders":     state["open_orders"],
+        "invested_usd":    state["invested_usd"],
+        "rewards":         state["rewards"],
+        "earnings_today":  state["earnings_today"],
+        "screener":        state["screener"],
+        "pnl_hist":        list(state["pnl_hist"]),
         "markets":         markets_out,
         "risk":            risk,
     }
@@ -511,6 +712,9 @@ async def startup():
     asyncio.create_task(_poll_telemetry())
     asyncio.create_task(_poll_bot_log())
     asyncio.create_task(_poll_wallet())
+    asyncio.create_task(_poll_orders())
+    asyncio.create_task(_poll_rewards())
+    asyncio.create_task(_poll_screener())
     asyncio.create_task(_broadcast_loop())
 
 @app.get("/", response_class=HTMLResponse)
@@ -520,6 +724,79 @@ async def root():
 @app.get("/state")
 async def get_state():
     return _build_payload()
+
+# ─── Control panel (token-protected order entry + MM start/stop) ───────────────
+# All execute actions require header  X-Control-Token: <token>.  Token comes from
+# $DASH_CONTROL_TOKEN, else generated + written to dashboard/.control_token (0600)
+# and printed in the log. Orders are POST-ONLY and capped — a fat-finger guard.
+CONTROL_TOKEN = os.getenv("DASH_CONTROL_TOKEN") or secrets.token_hex(12)
+CTRL_MAX_NOTIONAL = float(os.getenv("DASH_MAX_ORDER_NOTIONAL", "19"))
+try:
+    _tp = Path(__file__).parent / ".control_token"
+    _tp.write_text(CONTROL_TOKEN); os.chmod(_tp, 0o600)
+except Exception:
+    pass
+print(f"[dashboard] control token: {CONTROL_TOKEN}  (set $DASH_CONTROL_TOKEN to fix it)", flush=True)
+
+def _auth(req: Request):
+    if req.headers.get("X-Control-Token") != CONTROL_TOKEN:
+        raise HTTPException(status_code=401, detail="invalid control token")
+
+@app.post("/control/place")
+async def control_place(req: Request):
+    _auth(req)
+    b = await req.json()
+    token_id = str(b["token_id"]); side = str(b["side"]).upper()
+    price = float(b["price"]); size = float(b["size"])
+    if side not in ("BUY", "SELL"):
+        raise HTTPException(400, "side must be BUY or SELL")
+    if not (0.01 <= price <= 0.99):
+        raise HTTPException(400, "price out of range")
+    if price * size > CTRL_MAX_NOTIONAL:
+        raise HTTPException(400, f"notional {price*size:.2f} > cap {CTRL_MAX_NOTIONAL}")
+    def _do():
+        from py_clob_client_v2 import OrderArgsV2, OrderType, PartialCreateOrderOptions
+        c = _get_clob()
+        neg = c.get_neg_risk(token_id); tick = c.get_tick_size(token_id)
+        return c.create_and_post_order(
+            OrderArgsV2(token_id=token_id, price=price, size=size, side=side),
+            options=PartialCreateOrderOptions(tick_size=tick, neg_risk=neg),
+            order_type=OrderType.GTC, post_only=True)
+    r = await asyncio.get_event_loop().run_in_executor(None, _do)
+    ok = isinstance(r, dict) and r.get("success")
+    asyncio.get_event_loop().run_in_executor(None, _read_orders)
+    return {"ok": bool(ok), "raw": r}
+
+@app.post("/control/cancel_all")
+async def control_cancel_all(req: Request):
+    _auth(req)
+    r = await asyncio.get_event_loop().run_in_executor(None, lambda: _get_clob().cancel_all())
+    asyncio.get_event_loop().run_in_executor(None, _read_orders)
+    return {"ok": True, "raw": r}
+
+@app.post("/control/mm_start")
+async def control_mm_start(req: Request):
+    _auth(req)
+    b = await req.json()
+    contract = int(b.get("contract", 0)); size = float(b.get("size", 20)); hs = float(b.get("half_spread", 0.02))
+    base = Path(__file__).parent.parent
+    subprocess.run(["pkill", "-f", "mm_gateway.py"])  # stop any existing instance
+    await asyncio.sleep(1.2)
+    env = dict(os.environ); env["PYTHONPATH"] = str(base / ".pmlibs")
+    logf = open(base / "logs" / "mm.log", "a")
+    p = subprocess.Popen(
+        ["python3", str(base / "tools" / "mm_gateway.py"),
+         "--contracts", str(contract), "--size", str(size), "--half-spread", str(hs),
+         "--max-order-notional", "19", "--max-total-notional", "22", "--interval", "8", "--live"],
+        cwd=str(base), env=env, stdout=logf, stderr=logf,
+        stdin=subprocess.DEVNULL, start_new_session=True)  # detached: survives dashboard restarts
+    return {"ok": True, "pid": p.pid, "contract": contract, "size": size, "half_spread": hs}
+
+@app.post("/control/mm_stop")
+async def control_mm_stop(req: Request):
+    _auth(req)
+    subprocess.run(["pkill", "-f", "mm_gateway.py"])
+    return {"ok": True, "stopped": True}
 
 @app.websocket("/ws")
 async def ws_endpoint(ws: WebSocket):

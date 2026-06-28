@@ -13,6 +13,11 @@ if [ -f "$PID_FILE" ] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
     exit 0
 fi
 
+# stable control token (persisted across restarts)
+TOKFILE="$(dirname "$0")/.control_token"
+if [ -f "$TOKFILE" ]; then export DASH_CONTROL_TOKEN="$(cat "$TOKFILE")"; \
+else export DASH_CONTROL_TOKEN="$(openssl rand -hex 12)"; echo "$DASH_CONTROL_TOKEN" > "$TOKFILE"; chmod 600 "$TOKFILE"; fi
+
 echo "Starting Polymarket LP Dashboard on 0.0.0.0:8080 ..."
 nohup python3 -m uvicorn dashboard.server:app \
     --host 0.0.0.0 \

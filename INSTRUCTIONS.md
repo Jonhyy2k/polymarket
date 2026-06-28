@@ -212,12 +212,52 @@ Caps: `GW_MAX_ORDER_NOTIONAL` (default $10), `GW_MAX_ORDER_SIZE` (200 shares).
 
 ---
 
-## 7. Dashboard & logs
+## 7. Dashboard (monitor + control everything)
 
 ```bash
-cd /home/ubuntu/polymarket/dashboard && ./start.sh    # http://<EC2-ip>:8080 (open TCP 8080 in the SG)
+cd /home/ubuntu/polymarket/dashboard && ./start.sh    # http://<EC2-ip>:8080
 ```
-Shows wallet balances (pUSD/POL), configured markets + live books, bot status, risk.
+> Open **TCP 8080 → Source: My IP** in the EC2 security group (the dashboard has no
+> login; restrict it to your IP). Instance `i-0b579563952ae62b1`, SG `launch-wizard-2`.
+
+**Panels:**
+- **KPI strip** — *Invested $* (actual resting-order notional, **not** a hypothetical),
+  *Earned Today* (real rewards — **click it for a PnL/earnings chart**), *Collateral pUSD*
+  (deposit wallet), *Gas POL*, Net Delta, Max Loss, VaR.
+- **MARKETS** — your traded markets: live YES/NO, bid/ask, spread, pool.
+- **OPEN ORDERS** — exactly what your money is in right now (market, side, price, size, $).
+- **REWARDS** — the Polymarket rewards-page metrics per traded market: price Y/N,
+  **max spread**, **min size**, **$/day rate**, **DTE**, **competition** (LOW/MED/HIGH +
+  raw `market_competitiveness`), **earned today**, and **RATE Δ** (▲BUFFED / ▼NERFED,
+  derived by tracking the daily rate across polls).
+- **CONTROLS** — token-protected order entry (see below).
+- **SCREENER · TOP REWARD MARKETS** — the top 60 reward markets pulled live from the
+  CLOB, sorted by $/day. Columns: market (full name), YES/NO price, $/day, spread, min,
+  **DTE**, tick. **Click any row** to expand details: condition_id, end date + DTE,
+  resolution **description/rules**, and a **quick-quote** form (BUY YES/NO at your price/size).
+- **PORTFOLIO RISK / SYSTEM** — stress scenarios + feed/process health.
+
+### Control panel (place/cancel orders + start/stop the MM from the browser)
+All execute actions require the **control token**:
+```bash
+cat /home/ubuntu/polymarket/dashboard/.control_token     # the token (stable across restarts)
+```
+Paste it into the CONTROLS box → **Unlock** (stored in your browser). Then you can:
+- **Place order** — pick market → YES/NO → BUY/SELL → price → shares. *Always post-only,
+  capped ≤ $19/order* (a fat-finger guard).
+- **Cancel ALL** — flatten every resting order.
+- **Start MM / Stop MM** — launch or stop the auto market-maker on a chosen market/size
+  (started detached, so it survives a dashboard restart).
+- **Quick-quote from the screener** — expand any screener row → place a BUY on that exact
+  market at your price.
+
+The token is generated once and saved to `dashboard/.control_token`; `cat` just *reads*
+it (doesn't make a new one). It only changes if you delete that file. Pin your own with
+`export DASH_CONTROL_TOKEN=...` before `start.sh`.
+
+> ⚠️ Anyone who can reach :8080 **and** has the token can place/cancel orders and
+> start/stop the MM (it **cannot** withdraw funds — orders are post-only + capped).
+> Keep the SG restricted to your IP and don't share the token.
 
 **Logs / status files:**
 - `mm_status.json` — written by `mm_gateway.py` each cycle (open count, target notional, markets).
