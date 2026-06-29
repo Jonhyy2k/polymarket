@@ -275,3 +275,23 @@ scale; Micron is n = 1 (~flat). **Measure it in liquid markets before scaling a 
   ~120s if the process/box dies, plus a **systemd service** (`deploy/polymarket-mm.service`)
   that cancels cleanly on stop/reboot and auto-restarts. This closes the exact hole that
   caused the Micron fill: *naked orders resting on the exchange while our box is off.*
+
+## 14. Measurement tooling (shipped 2026-06-29)
+
+The cheaper t3.medium box makes a continuous, near-free measurement campaign viable.
+Two instruments are live; one piece (automated fill-handling) is the next build.
+
+1. **Exitability-ranked screener (shipped).** The dashboard screener now probes each
+   top-by-rate market's order book (batch `get_order_books`) for **book spread** and
+   **touch depth**, and ranks by a composite **EXIT score = rate × spread_factor ×
+   depth_factor** (GOOD / OK / POOR). This surfaces *tradeable* reward (deep, tight books)
+   and sinks the illiquid traps — the master "only LP where you can exit" filter from §12.
+   Result: World-Cup / Fed / big-event markets (0.1–2¢ spreads, 5–6 figure depth) top the
+   list; a Micron-style 36¢-spread book scores near zero.
+2. **Fill telemetry (shipped).** `tools/fill_telemetry.py` — read-only daemon that watches
+   deposit-wallet fills and samples the mid at **+1m / +5m / +15m**, writing a signed
+   **mark-out** per fill to `logs/fill_telemetry.csv` (`> 0` favourable, `< 0` = adverse
+   selection). This is the dataset that answers the §12 go/no-go: rewards vs adverse bleed.
+3. **Automated fill-handling (next).** Inventory **skew** (stop quoting the filled side) →
+   **fast scratch** (exit at ≥ fill) → **stop-loss** → **DTE flatten**, gated off by default
+   and dry-runnable. Pairs with the first measured live pilot in a GOOD-exit market.

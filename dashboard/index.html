@@ -259,10 +259,10 @@
 </div>
 <table>
   <thead><tr>
-    <th class="l">#</th><th class="l">MARKET</th><th>YES / NO</th><th>$/DAY</th>
-    <th>SPREAD</th><th>MIN</th><th>DTE</th><th>TICK</th>
+    <th class="l">#</th><th class="l">MARKET</th><th>YES / NO</th><th>EXIT</th><th>$/DAY</th>
+    <th>SPR¢</th><th>DEPTH</th><th>BAND¢</th><th>MIN</th><th>DTE</th>
   </tr></thead>
-  <tbody id="sctbody"><tr><td colspan="8" class="l dim" style="padding:14px">loading screener…</td></tr></tbody>
+  <tbody id="sctbody"><tr><td colspan="10" class="l dim" style="padding:14px">loading screener…</td></tr></tbody>
 </table>
 
 <!-- ── Risk ── -->
@@ -489,28 +489,32 @@ function render(d){
 // ── screener ──
 function scRowHtml(m,i){
   const dte = m.dte!=null?(m.dte+'d'):'—';
+  const ex = m.exit_label||'?';
+  const exCls = ex==='GOOD'?'up':ex==='POOR'?'down':ex==='OK'?'amber':'dim';
   return `<tr class="clickable" onclick="scToggle(${i})">`+
     `<td class="l dim">${i+1}</td>`+
     `<td class="l white">${(m.question||'—')}${m.neg_risk?'<span class="dim"> ·neg</span>':''}</td>`+
     `<td class="num cyan">${fc(m.yes_price)} / ${fc(m.no_price)}</td>`+
+    `<td class="num ${exCls}">${ex}</td>`+
     `<td class="num up">$${m.rate_day}</td>`+
-    `<td class="num">${m.max_spread!=null?m.max_spread+'¢':'—'}</td>`+
+    `<td class="num">${m.spread_c!=null?m.spread_c+'¢':'—'}</td>`+
+    `<td class="num">${m.depth!=null?m.depth:'—'}</td>`+
+    `<td class="num dim">${m.max_spread!=null?m.max_spread+'¢':'—'}</td>`+
     `<td class="num">${m.min_size??'—'}</td>`+
-    `<td class="num">${dte}</td>`+
-    `<td class="num dim">${m.tick??'—'}</td></tr>`+
-    `<tr class="detail" id="scd-${i}" style="display:none"><td colspan="8"><div class="detail-box" id="scd-box-${i}"></div></td></tr>`;
+    `<td class="num">${dte}</td></tr>`+
+    `<tr class="detail" id="scd-${i}" style="display:none"><td colspan="10"><div class="detail-box" id="scd-box-${i}"></div></td></tr>`;
 }
 function renderScreenerRows(list){
   window.SCREENER = list;
   const tb = document.getElementById('sctbody');
   tb.innerHTML = list.length ? list.map(scRowHtml).join('')
-    : '<tr><td colspan="8" class="l dim" style="padding:14px">no markets</td></tr>';
+    : '<tr><td colspan="10" class="l dim" style="padding:14px">no markets</td></tr>';
 }
 function renderScreener(d){
   if(window.SC_SEARCH) return;   // a search view is active — don't clobber it on live updates
   if(window.SC_OPEN!=null) return; // a detail/quote form is open — don't collapse it
   const sc = d.screener||[];
-  document.getElementById('sc-ts').textContent = sc.length+' reward markets · click a row';
+  document.getElementById('sc-ts').textContent = sc.length+' markets · ranked by EXIT score (tradeable reward) · click a row';
   renderScreenerRows(sc);
 }
 window.scSearch = async function(){
@@ -540,6 +544,7 @@ window.scToggle = function(i){
     `<div class="meta white">${m.question||'—'}</div>`+
     `<div class="meta">CONDITION <code>${m.condition_id}</code></div>`+
     `<div class="meta">END ${end} · DTE ${m.dte!=null?m.dte+' days':'—'} · TICK ${m.tick} · MIN ${m.min_size} sh · MAX SPREAD ${m.max_spread}¢ · $${m.rate_day}/day · slug <code>${m.slug||'—'}</code></div>`+
+    `<div class="meta">EXITABILITY: best bid ${m.best_bid!=null?fc(m.best_bid):'—'} / ask ${m.best_ask!=null?fc(m.best_ask):'—'} · book spread <b>${m.spread_c!=null?m.spread_c+'¢':'—'}</b> · touch depth ${m.depth!=null?m.depth+' sh':'—'} · rating <b class="${m.exit_label==='GOOD'?'up':m.exit_label==='POOR'?'down':''}">${m.exit_label||'?'}</b> · score ${m.exit_score??'—'} <span class="dim">(rate × tightness × depth — higher = more tradeable)</span></div>`+
     `<div class="meta" id="scd-comp-${i}">COMPETITION <span class="dim">loading…</span></div>`+
     `<div class="desc">${(m.description||'no description / resolution rules').replace(/</g,'&lt;')}</div>`+
     `<div class="meta" style="margin-top:8px">QUICK-QUOTE (BUY, post-only, capped ≤$19 — unlock the control token first):</div>`+

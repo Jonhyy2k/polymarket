@@ -443,12 +443,58 @@ def _read_screener():
                 "tags":        m.get("tags") or [],
             })
         rows.sort(key=lambda r: r["rate_day"], reverse=True)
+        # ── exitability: probe top-by-rate books for spread + depth, then re-rank ──
+        # The Micron lesson: rank by *tradeable* reward, not raw reward. A fat rate in a
+        # 36¢-wide/thin book is a trap. score = rate × spread_factor × depth_factor.
+        _annotate_exitability(c, rows[:150])
+        for r in rows:
+            r.setdefault("exit_score", round(r["rate_day"] * 0.02, 3))  # unprobed → sink
+            r.setdefault("exit_label", "?"); r.setdefault("spread_c", None)
+            r.setdefault("depth", None); r.setdefault("best_bid", None); r.setdefault("best_ask", None)
+        rows.sort(key=lambda r: r["exit_score"], reverse=True)
         global _SCREENER_ALL
         _SCREENER_ALL = rows
         state["screener"] = rows[:60]
         state["screener_ts"] = datetime.now(timezone.utc).isoformat()
     except Exception:
         pass
+
+def _annotate_exitability(c, subset):
+    """Fetch YES-token books in batches; annotate each row with spread/depth/exit score."""
+    from py_clob_client_v2.clob_types import BookParams
+    toks = [r["yes_token"] for r in subset if r.get("yes_token")]
+    books = {}
+    for i in range(0, len(toks), 50):
+        chunk = toks[i:i+50]
+        try:
+            for b in (c.get_order_books([BookParams(token_id=t) for t in chunk]) or []):
+                books[b.get("asset_id")] = b
+        except Exception:
+            pass
+    for r in subset:
+        b = books.get(r.get("yes_token"))
+        bids = (b or {}).get("bids") or []
+        asks = (b or {}).get("asks") or []
+        if not bids or not asks:
+            r["exit_score"] = round(r["rate_day"] * 0.02, 3)
+            r["exit_label"] = "?"; r["spread_c"] = None; r["depth"] = None
+            r["best_bid"] = None; r["best_ask"] = None
+            continue
+        bb = max(bids, key=lambda x: float(x["price"]))
+        ba = min(asks, key=lambda x: float(x["price"]))
+        best_bid, best_ask = float(bb["price"]), float(ba["price"])
+        spread_c = round((best_ask - best_bid) * 100, 2)
+        depth = round(min(float(bb["size"]), float(ba["size"])), 1)
+        band = float(r.get("max_spread") or 2.0)            # reward band, in cents
+        msz  = float(r.get("min_size") or 20)
+        spread_factor = 1.0 if spread_c <= band else max(0.0, band / spread_c)
+        depth_factor  = min(depth / msz, 1.0) if msz else 0.0
+        r["best_bid"] = best_bid; r["best_ask"] = best_ask
+        r["spread_c"] = spread_c; r["depth"] = depth
+        r["exit_score"] = round(r["rate_day"] * spread_factor * depth_factor, 3)
+        r["exit_label"] = ("GOOD" if spread_factor >= 0.5 and depth_factor >= 1.0
+                           else "OK" if spread_factor >= 0.25 and depth_factor >= 0.5
+                           else "POOR")
 
 async def _poll_screener():
     while True:
