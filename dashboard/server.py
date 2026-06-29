@@ -118,6 +118,11 @@ state = {
     "open_orders":      [],
     "invested_usd":     0.0,
     "orders_ts":        None,
+    # filled inventory — tokens we actually hold (NOT resting orders)
+    "positions":        [],
+    "positions_value":  0.0,
+    "positions_pnl":    0.0,
+    "positions_ts":     None,
     # reward-program metrics per market + actual earnings
     "rewards":          {},
     "earnings_today":   0.0,
@@ -126,6 +131,12 @@ state = {
     "screener":         [],
     "screener_ts":      None,
     "pnl_hist":         deque(maxlen=500),
+    # all-time earnings: per-day rewards + running cumulative (for the chart toggle)
+    "earnings_history": [],
+    "earnings_alltime": 0.0,
+    "earnings_hist_ts": None,
+    # portfolio value time series (cash + position value + position P&L) for the chart
+    "port_hist":        deque(maxlen=500),
 }
 
 _clients: Set[WebSocket] = set()
@@ -201,11 +212,18 @@ def _read_orders():
         oo = _get_clob().get_open_orders() or []
         rows, invested = [], 0.0
         for o in oo:
-            name, outcome = _token_label(o.get("asset_id", ""))
+            aid = o.get("asset_id", "")
+            name, outcome = _token_label(aid)
+            full = name
+            for m in MARKETS:
+                if aid == m.get("yes_token") or aid == m.get("no_token"):
+                    full = m["name"]; break
             price = float(o.get("price", 0)); size = float(o.get("original_size", 0))
             invested += price * size
-            rows.append({"market": name, "outcome": outcome, "side": o.get("side"),
-                         "price": price, "size": size})
+            rows.append({"market": name, "market_full": full, "outcome": outcome,
+                         "side": o.get("side"), "price": price, "size": size,
+                         "asset": aid, "cond": o.get("market"),
+                         "matched": float(o.get("size_matched", 0) or 0)})
         state["open_orders"] = rows
         state["invested_usd"] = round(invested, 2)
         state["orders_ts"] = datetime.now(timezone.utc).isoformat()
@@ -216,6 +234,63 @@ async def _poll_orders():
     while True:
         await asyncio.get_event_loop().run_in_executor(None, _read_orders)
         await asyncio.sleep(10)
+
+# ─── Filled inventory (tokens we actually hold) ────────────────────────────────
+# Resting orders ≠ holdings. When a maker order fills we acquire YES/NO tokens that
+# sit in the deposit wallet until sold or resolved. The CLOB "open orders" call does
+# NOT show these, so a filled position was invisible on the dashboard. This polls
+# Polymarket's data-api for the deposit wallet's actual positions.
+def _read_positions():
+    try:
+        url = f"https://data-api.polymarket.com/positions?user={DEPOSIT_WALLET}"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=12) as r:
+            raw = json.loads(r.read())
+        rows, val, pnl = [], 0.0, 0.0
+        for p in (raw or []):
+            sz = float(p.get("size", 0) or 0)
+            if abs(sz) < 1e-9:
+                continue
+            cv = float(p.get("currentValue", 0) or 0)
+            cp = float(p.get("cashPnl", 0) or 0)
+            val += cv; pnl += cp
+            rows.append({
+                "title":      p.get("title") or p.get("slug") or "?",
+                "outcome":    p.get("outcome"),
+                "size":       round(sz, 4),
+                "avg_price":  p.get("avgPrice"),
+                "cur_price":  p.get("curPrice"),
+                "value":      round(cv, 2),
+                "pnl":        round(cp, 2),
+                "pct_pnl":    round(float(p.get("percentPnl", 0) or 0), 1),
+                "redeemable": bool(p.get("redeemable")),
+                "end_date":   p.get("endDate"),
+                "cond":       p.get("conditionId"),
+                "asset":      p.get("asset"),
+            })
+        state["positions"] = rows
+        state["positions_value"] = round(val, 2)
+        state["positions_pnl"] = round(pnl, 2)
+        state["positions_ts"] = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        pass
+
+async def _poll_positions():
+    while True:
+        await asyncio.get_event_loop().run_in_executor(None, _read_positions)
+        # sample portfolio value (cash + position value + position P&L) for the chart.
+        # skip until the wallet poller has a real cash figure, so we never plot a fake $0 dip.
+        try:
+            import time as _t
+            cash = state.get("pusd")
+            if cash is not None:
+                pv = state.get("positions_value", 0.0)
+                state["port_hist"].append({"t": int(_t.time()), "total": round(cash + pv, 2),
+                                           "cash": round(cash, 2), "pos": round(pv, 2),
+                                           "pnl": state.get("positions_pnl", 0.0)})
+        except Exception:
+            pass
+        await asyncio.sleep(15)
 
 # ─── Reward-program metrics (the Polymarket "Rewards" page, per market) ────────
 # max_spread, min_size, $/day rate, competition (market_competitiveness),
@@ -280,6 +355,40 @@ async def _poll_rewards():
         except Exception:
             pass
         await asyncio.sleep(30)
+
+# ─── All-time earnings history (per-day rewards, cumulative) ───────────────────
+# get_earnings_for_user_for_day is per-UTC-day; "today" resets at 00:00. To show an
+# all-time view we walk each day from account start to today and accumulate.
+import datetime as _dtmod
+EARN_START = _dtmod.date(2026, 6, 25)   # a couple days before first funding; days<start earn $0
+
+def _read_earnings_history():
+    try:
+        c = _get_clob()
+        today = _dtmod.date.today()
+        start = max(EARN_START, today - _dtmod.timedelta(days=90))
+        hist, cum = [], 0.0
+        d = start
+        while d <= today:
+            iso = d.isoformat()
+            try:
+                rows = c.get_earnings_for_user_for_day(iso) or []
+                day_earn = sum(float(x.get("earnings", 0) or 0) for x in rows)
+            except Exception:
+                day_earn = 0.0
+            cum += day_earn
+            hist.append({"date": iso, "day": round(day_earn, 4), "cum": round(cum, 4)})
+            d += _dtmod.timedelta(days=1)
+        state["earnings_history"] = hist
+        state["earnings_alltime"] = round(cum, 4)
+        state["earnings_hist_ts"] = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        pass
+
+async def _poll_earnings_history():
+    while True:
+        await asyncio.get_event_loop().run_in_executor(None, _read_earnings_history)
+        await asyncio.sleep(300)   # 5 min — earnings finalize slowly
 
 # ─── Market screener: top reward markets pulled live from the CLOB ─────────────
 def _dte(iso):
@@ -706,10 +815,17 @@ def _build_payload() -> Dict:
         },
         "open_orders":     state["open_orders"],
         "invested_usd":    state["invested_usd"],
+        "positions":       state["positions"],
+        "positions_value": state["positions_value"],
+        "positions_pnl":   state["positions_pnl"],
+        "portfolio_total": round((state["pusd"] or 0.0) + state["positions_value"], 2),
         "rewards":         state["rewards"],
         "earnings_today":  state["earnings_today"],
         "screener":        state["screener"],
         "pnl_hist":        list(state["pnl_hist"]),
+        "earnings_history":state["earnings_history"],
+        "earnings_alltime":state["earnings_alltime"],
+        "port_hist":       list(state["port_hist"]),
         "markets":         markets_out,
         "risk":            risk,
     }
@@ -724,7 +840,9 @@ async def startup():
     asyncio.create_task(_poll_bot_log())
     asyncio.create_task(_poll_wallet())
     asyncio.create_task(_poll_orders())
+    asyncio.create_task(_poll_positions())
     asyncio.create_task(_poll_rewards())
+    asyncio.create_task(_poll_earnings_history())
     asyncio.create_task(_poll_screener())
     asyncio.create_task(_broadcast_loop())
 
@@ -777,6 +895,56 @@ async def control_place(req: Request):
     ok = isinstance(r, dict) and r.get("success")
     asyncio.get_event_loop().run_in_executor(None, _read_orders)
     return {"ok": bool(ok), "raw": r}
+
+@app.post("/control/close_position")
+async def control_close_position(req: Request):
+    # Sell held inventory at a chosen price. NOT post-only and NOT notional-capped:
+    # you're selling tokens you already own (can't overspend cash), and you may want
+    # to price into the bid to fill immediately. Exchange rejects selling > you hold.
+    _auth(req)
+    b = await req.json()
+    token_id = str(b["token_id"]); price = float(b["price"]); size = float(b["size"])
+    if not (0.01 <= price <= 0.99):
+        raise HTTPException(400, "price out of range")
+    if size <= 0:
+        raise HTTPException(400, "size must be > 0")
+    def _do():
+        from py_clob_client_v2 import OrderArgsV2, OrderType, PartialCreateOrderOptions
+        c = _get_clob()
+        neg = c.get_neg_risk(token_id); tick = c.get_tick_size(token_id)
+        return c.create_and_post_order(
+            OrderArgsV2(token_id=token_id, price=price, size=size, side="SELL"),
+            options=PartialCreateOrderOptions(tick_size=tick, neg_risk=neg),
+            order_type=OrderType.GTC, post_only=False)
+    r = await asyncio.get_event_loop().run_in_executor(None, _do)
+    ok = isinstance(r, dict) and r.get("success")
+    asyncio.get_event_loop().run_in_executor(None, _read_orders)
+    asyncio.get_event_loop().run_in_executor(None, _read_positions)
+    return {"ok": bool(ok), "raw": r}
+
+@app.get("/market_rewards")
+async def market_rewards(cid: str):
+    # Lazy per-market reward detail (competition level + config) for the screener
+    # detail box. Read-only, no auth. One CLOB call per expanded row.
+    def _do():
+        try:
+            raw = _get_clob().get_raw_rewards_for_market(cid) or []
+        except Exception:
+            return {}
+        if not raw:
+            return {}
+        r = raw[0]
+        toks = {t.get("outcome", "").lower(): t.get("price") for t in r.get("tokens", [])}
+        cfg = (r.get("rewards_config") or [{}])[0]
+        return {
+            "min_size":        r.get("rewards_min_size"),
+            "max_spread":      r.get("rewards_max_spread"),
+            "competitiveness": r.get("market_competitiveness"),
+            "rate_day":        cfg.get("rate_per_day"),
+            "yes_price":       toks.get("yes"),
+            "no_price":        toks.get("no"),
+        }
+    return await asyncio.get_event_loop().run_in_executor(None, _do)
 
 @app.post("/control/cancel_all")
 async def control_cancel_all(req: Request):

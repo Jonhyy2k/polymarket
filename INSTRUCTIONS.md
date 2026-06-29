@@ -154,12 +154,31 @@ PYTHONPATH=./.pmlibs python3 tools/mm_gateway.py --contracts 0,1,2 --size 50 --l
 | `--max-order-notional` | $ cap per single order | `5` |
 | `--max-total-notional` | $ cap across all live orders | `20` |
 | `--interval` | loop period (seconds) | `5` |
+| `--gtd-expiry` | **seconds until a resting order auto-expires** if we go silent | `120` |
 | `--duration` | auto stop + flatten after N s (`0` = run forever) | `0` |
 | `--live` | **actually place orders** (omit = dry-run) | off |
 
 > To actually **earn rewards** (not just test mechanics), use `--size` ≥ the
 > market's `rewards_min_size` (commonly 50 shares ≈ $6/order) and `--half-spread`
 > ≤ its `rewards_max_spread`. Below min-size orders rest fine but don't score.
+
+> **Orders are GTD** (good-til-date): each rests for `--gtd-expiry` seconds, then
+> auto-expires unless re-quoted. So if the process or the whole box dies, your
+> orders die with it within ~2 min — they can never sit naked overnight (the bug
+> that caused the Micron fill). The live loop re-quotes well inside that window.
+
+### Run the MM as an auto-restarting service (survives crash + reboot)
+For an unattended live run, install it as a systemd unit instead of a bare process:
+```bash
+cp deploy/mm.env.example deploy/mm.env          # then edit MM_CONTRACTS / MM_SIZE / caps
+sudo cp deploy/polymarket-mm.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now polymarket-mm        # start + run on every boot
+journalctl -u polymarket-mm -f                   # live logs
+sudo systemctl stop polymarket-mm                # stop (cancels all orders cleanly via SIGTERM)
+```
+On stop/reboot the service catches SIGTERM and cancel-all's; `Restart=always` brings it
+back after a crash. `deploy/mm.env` is gitignored (it configures live trading).
 
 ---
 
@@ -228,22 +247,35 @@ journalctl -u polymarket-dashboard -f           # live logs
 > The control token lives in `dashboard/dashboard.env` (pinned for the service).
 
 **Panels:**
-- **KPI strip** — *Invested $* (actual resting-order notional, **not** a hypothetical),
-  *Earned Today* (real rewards — **click it for a PnL/earnings chart**), *Collateral pUSD*
-  (deposit wallet), *Gas POL*, Net Delta, Max Loss, VaR.
+- **KPI strip** — *In Orders $* (resting-order notional, **not** a hypothetical),
+  *Positions $* (value of tokens you actually **hold**, with P&L), *Total Value $*
+  (cash + positions — **click for a live portfolio-value chart**), *Earned Today*
+  (real rewards — **click for the rewards chart**), *Collateral pUSD* (deposit wallet),
+  *Gas POL*, Net Delta, Max Loss, VaR.
 - **MARKETS** — your traded markets: live YES/NO, bid/ask, spread, pool.
-- **OPEN ORDERS** — exactly what your money is in right now (market, side, price, size, $).
+- **OPEN ORDERS** — your resting orders (market, side, price, size, $). **Click any row**
+  to expand: full market name, condition_id, asset_id, matched size, and a Cancel-all button.
+- **POSITIONS** — *tokens you actually hold from filled orders* (a resting order ≠ a
+  holding; the CLOB "open orders" call does not show inventory, so filled positions used to
+  be invisible). Columns: market, outcome, size, avg, now, value, P&L $/%, DTE. **Click a
+  row to SELL/close** it: enter a price + shares → **Sell** (rests as an ask at your price,
+  or fills now if you price at/below the bid). Uses `/control/close_position` — *not*
+  post-only and *not* notional-capped (you're selling tokens you own, can't overspend).
 - **REWARDS** — the Polymarket rewards-page metrics per traded market: price Y/N,
   **max spread**, **min size**, **$/day rate**, **DTE**, **competition** (LOW/MED/HIGH +
-  raw `market_competitiveness`), **earned today**, and **RATE Δ** (▲BUFFED / ▼NERFED,
-  derived by tracking the daily rate across polls).
+  raw `market_competitiveness`), **earned today**, and **RATE Δ** (▲BUFFED / ▼NERFED).
 - **CONTROLS** — token-protected order entry (see below).
 - **SCREENER · TOP REWARD MARKETS** — the top 60 reward markets pulled live from the
   CLOB, sorted by $/day. Columns: market (full name), YES/NO price, $/day, spread, min,
-  **DTE**, tick. **Click any row** to expand details: condition_id, end date + DTE,
-  resolution **description/rules**, and a **quick-quote** form (BUY YES/NO at your price/size).
-  **Search bar** — type any market name (Micron, Bitcoin, France…) to search the *full*
-  reward-market universe (~7,300 markets, paginated from the API); Clear returns to the top 60.
+  **DTE**, tick. **Click any row** to expand: condition_id, end date + DTE, resolution
+  **rules**, **COMPETITION level** (lazy-loaded `market_competitiveness` → LOW/MED/HIGH),
+  and a **quick-quote** form (BUY YES/NO at your price/size) with a **"Rec ✨" button**
+  that auto-fills a recommended price *inside that market's reward band* (from its
+  max_spread + midpoint). **Search bar** — type any market name to search the *full*
+  reward-market universe (~7,300 markets, paginated); Clear returns to the top 60.
+- **Chart modal** (from the *Earned Today* or *Total Value* KPI) — three tabs:
+  **Rewards today** (live), **Rewards all-time** (per-day bars + cumulative line), and
+  **Portfolio value** (total value + position value over time).
 - **PORTFOLIO RISK / SYSTEM** — stress scenarios + feed/process health.
 
 ### Control panel (place/cancel orders + start/stop the MM from the browser)
@@ -260,7 +292,9 @@ Paste it into the CONTROLS box → **Unlock** (stored in your browser). Then you
 - **⛔ ABORT** — the big red button: **one click stops every MM process AND cancels every
   resting order** (panic flatten → all cash). Use it if anything looks wrong.
 - **Quick-quote from the screener** — expand any screener row → place a BUY on that exact
-  market at your price.
+  market at your price, with a **"Rec ✨"** button that fills in a price inside the reward band.
+- **Sell / close a position** — expand any **POSITIONS** row → price + shares → **Sell**.
+  Rests as an ask at your price, or fills immediately if you price at/below the bid.
 
 The token is generated once and saved to `dashboard/.control_token`; `cat` just *reads*
 it (doesn't make a new one). It only changes if you delete that file. Pin your own with
@@ -281,8 +315,13 @@ it (doesn't make a new one). It only changes if you delete that file. Pin your o
 
 ## 8. Safety model (built in)
 
-- **post-only** — every order; we never take, never pay taker fees.
-- **cash-only** — only BUY orders; max loss is bounded by what we choose to buy.
+- **post-only** — every MM/quote order; we never take, never pay taker fees. (The one
+  exception is the dashboard **Sell-a-position** action, which *may* cross the spread to
+  exit inventory you already hold — it cannot overspend cash.)
+- **GTD auto-expiry** — MM orders are **GTD (good-til-date, ~120s)**: if the process or the
+  whole box dies, resting orders **auto-expire within ~2 min** instead of sitting naked
+  forever. (Fixes the overnight Micron fill — see `REWARD_HARVEST_STRATEGY.md` §11.)
+- **cash-only** — MM places only BUY orders; max loss is bounded by what we choose to buy.
 - **Hard caps** — per-order notional, total notional, size, open-order count
   (enforced in both `mm_gateway.py` and the connector).
 - **Cancel-all on start AND on every exit** — startup clears orphans; SIGINT/SIGTERM/

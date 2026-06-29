@@ -130,16 +130,29 @@ real SELL would need it). post-only ⇒ never crosses, never pays taker.
 
 ### Live dashboard (`dashboard/start.sh` → `:8080`)
 A monitor + control terminal (full details in [INSTRUCTIONS.md](INSTRUCTIONS.md) §7):
-- **Real** capital/PnL: *Invested $* (actual resting notional), *Earned Today* (real
-  rewards — click for a chart), deposit-wallet pUSD + gas POL.
-- **Open Orders** (what you're invested in) and **Rewards** metrics per traded market
-  (max spread, min size, $/day, **DTE**, competition, earned, ▲BUFFED/▼NERFED).
-- **Screener** — top 60 reward markets live from the CLOB (name, price, $/day, spread,
-  min, DTE); click a row for resolution rules + a quick-quote form.
-- **Controls** — token-protected (`dashboard/.control_token`): place/cancel orders
-  (post-only, capped) and start/stop the MM from the browser.
+- **Real** capital/PnL KPIs: *In Orders $* (resting notional), *Positions $* (tokens you
+  actually hold + P&L), *Total Value $* (cash + positions — click for a live portfolio
+  chart), *Earned Today* (real rewards — click for the rewards chart), pUSD + gas POL.
+- **Open Orders** and **Positions** (filled inventory the CLOB call doesn't show) — both
+  **click-to-expand** for full market name/IDs; **sell/close a position** straight from its row.
+- **Rewards** metrics per traded market (max spread, min size, $/day, DTE, competition,
+  earned, ▲BUFFED/▼NERFED).
+- **Screener** — top 60 reward markets live from the CLOB; click a row for resolution
+  rules, **competition level**, and a quick-quote form with a **recommended-price** button;
+  search the full ~7,300-market universe.
+- **Chart modal** — Rewards today (live) · Rewards all-time (daily) · Portfolio value (live).
+- **Controls** — token-protected (`dashboard/.control_token`): place/cancel/**sell**, ABORT,
+  and start/stop the MM from the browser.
 > No auth on the page itself — restrict SG **TCP 8080 to your IP**; the control token
-> gates execution (and can't withdraw — orders are post-only + capped).
+> gates execution (and can't withdraw — orders are post-only/capped, sells only liquidate
+> tokens you hold).
+
+### Hardening (2026-06-29)
+The MM now posts **GTD orders** (auto-expire ~120s if the process/box dies) and ships a
+**systemd unit** (`deploy/polymarket-mm.service`, clean SIGTERM cancel + auto-restart) — so
+resting orders can't sit naked while the box is off. See the first live fill post-mortem and
+the refined fill-handling strategy in [REWARD_HARVEST_STRATEGY.md](REWARD_HARVEST_STRATEGY.md)
+§11–13.
 
 ---
 

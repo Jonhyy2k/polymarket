@@ -30,3 +30,4 @@ __pycache__/
 mm_status.json
 dashboard/.control_token
 dashboard/dashboard.env
+deploy/mm.env

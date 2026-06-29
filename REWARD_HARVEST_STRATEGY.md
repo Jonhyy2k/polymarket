@@ -203,3 +203,75 @@ cancel = gasless), so a fast "chase buffs / flee nerfs in low-competition pools"
 harvester is genuinely feasible — the limits are **capital** (more = more
 simultaneous pools) and **adverse selection** (the unmeasured number). Worth
 building out at €500+; at €20 it's a learning exercise.*
+
+---
+
+## 11. Live case study — the Micron NO fill (2026-06-28 → 29)
+
+The first real fill of the live LP, and the whole strategy compressed into one trade.
+
+Sequence:
+- Quoted two-sided on Micron "(HIGH) $1,200" — `BUY YES @0.51` + `BUY NO @0.45`, GTC.
+- The EC2 box was **stopped overnight with the orders still resting**. GTC orders live on
+  Polymarket's servers forever, independent of our box — so at 07:53, **while the box was
+  OFF**, the `BUY NO @0.45` filled. We acquired 20 NO ($9): a one-sided ("legged")
+  directional position we never chose.
+- The market then whipsawed (NO mid 0.45 → 0.64 → 0.43 over the day) but the **book was
+  illiquid** — e.g. bid 0.42 / ask 0.78, a **36¢ spread**. The data-API midpoint mark
+  flashed "+42%" that was **never realizable**; the real best bid sat far below it.
+- Finally flattened by selling 20 NO @ 0.41 (taker) → ~$8.01 net. Round-trip trade: **−$0.99**.
+
+**Tally:** rewards earned while quoting **+$1.29** vs the trade **−$0.99** (+ ~$0.10
+frictions) → **net ≈ +$0.20 (~flat)** on ~$24 over 2 days. **The LP rewards just barely
+paid for the cost of one bad fill in an illiquid market.** That is the lesson in one number.
+
+## 12. Refined strategy (from the Micron episode)
+
+**Three P&L sources, ranked:**
+1. **Rewards** — reliable, low-variance, the *designed* edge. The base.
+2. **Spread capture** — the round-trip: both quotes fill, you pocket the bid/ask and stay
+   flat. The *actual* market-making profit. **Requires liquidity.**
+3. **Directional P&L from leftover inventory** — adversely selected, high-variance.
+   **A leak to neutralize, never a profit center.** The emotional trap is letting a #3
+   windfall (the NO "+42%") tempt you into discretionary directional trading — where you're
+   slow, undercapitalized, and on the wrong side of informed flow.
+
+**Why fills hurt — legging + adverse selection.** Two-sided quotes get filled on the side
+that's about to move *against* you, and the other leg doesn't fill → you hold the loser,
+naked. Counter with **inventory skew**: the instant you're long X, stop bidding X, lift your
+X offer to the front, and scratch it back out (≥ fill = neutral; fill + 1–2 ticks = the
+spread you were owed).
+
+**Fill-handling state machine (automate it — the window is seconds; discretion = emotion):**
+```
+FLAT → quote two-sided → on fill → INVENTORY:
+  1. skew         : stop quoting the filled side; post passive exit at fill + target_ticks
+  2. fast scratch : if unfilled within T_fast AND a bid >= fill appears, sell flat
+  3. risk hold (bounded): inventory cap Q_max ; stop-loss at fill - S ;
+                  DTE flatten — force-exit ~24h before resolution.
+                  NEVER hold inventory into the event (binary $0/$1 risk).
+  -> back to FLAT
+```
+
+**The real lever is ENTRY, not exit.** No exit policy saves an illiquid book — Micron failed
+*every* exit test by construction (36¢ spread, no depth, so "hold until favorable" = "hold
+and pray"). The juiciest reward rates live in the illiquid, low-competition markets
+**precisely because they're traps** — the reward is the bribe for the exit risk. So the
+master filter sits *above* the fill logic: **only LP where you can exit** — touch depth ≥ k×
+your size, spread ≤ threshold. Often the right move is to pass on a fat reward for a thinner
+one in a tradeable book.
+
+**The number that decides everything:** reward/day vs adverse-selection bleed/day, per
+market. If reward < bleed you lose money *while feeling productive*. Still unmeasured at
+scale; Micron is n = 1 (~flat). **Measure it in liquid markets before scaling a dollar.**
+
+## 13. Operational findings (2026-06-29)
+
+- **`min_size` capital floor.** Every reward-*paying* market has `min_size ≥ 20` (most are
+  **50**); the `min_size 0` markets pay $0 (`max_spread 0`). A qualifying two-sided quote
+  costs ≈ `min_size × $0.95` → **$19+** (Micron's min_size is 50 → ~**$48**). Orders below
+  `min_size`, or a lone one-sided exit order, earn **nothing**.
+- **GTD hardening (shipped).** `mm_gateway.py` now posts **GTD** orders that auto-expire in
+  ~120s if the process/box dies, plus a **systemd service** (`deploy/polymarket-mm.service`)
+  that cancels cleanly on stop/reboot and auto-restarts. This closes the exact hole that
+  caused the Micron fill: *naked orders resting on the exchange while our box is off.*

@@ -1,0 +1,24 @@
+[Unit]
+Description=Polymarket Market-Maker (cash-only two-sided, GTD orders)
+After=network-online.target polymarket-dashboard.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/polymarket
+Environment=PYTHONPATH=/home/ubuntu/polymarket/.pmlibs
+# Per-run knobs (market index, size, spread, caps, GTD expiry) live here:
+EnvironmentFile=/home/ubuntu/polymarket/deploy/mm.env
+ExecStart=/usr/bin/python3 tools/mm_gateway.py \
+  --contracts ${MM_CONTRACTS} --size ${MM_SIZE} --half-spread ${MM_HALF_SPREAD} \
+  --max-order-notional ${MM_MAX_ORDER} --max-total-notional ${MM_MAX_TOTAL} \
+  --interval ${MM_INTERVAL} --gtd-expiry ${MM_GTD} --live
+# On stop/reboot, the MM catches SIGTERM and cancel-all's its orders. Give it room.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+Restart=always
+RestartSec=4
+
+[Install]
+WantedBy=multi-user.target

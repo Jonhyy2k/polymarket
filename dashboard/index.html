@@ -135,8 +135,10 @@
 
 <!-- ── Top KPI strip ── -->
 <div class="riskgrid" id="kpi">
-  <div class="riskcell"><div class="lbl">Invested $</div><div class="val white num" id="k-aum">—</div><div class="sub" id="k-aum-sub">resting orders</div></div>
-  <div class="riskcell click" onclick="openPnl()"><div class="lbl">Earned Today ▸ chart</div><div class="val up num" id="k-rew">—</div><div class="sub" id="k-pool">live rewards (USDC.e)</div></div>
+  <div class="riskcell"><div class="lbl">In Orders $</div><div class="val white num" id="k-aum">—</div><div class="sub" id="k-aum-sub">resting orders</div></div>
+  <div class="riskcell"><div class="lbl">Positions $</div><div class="val white num" id="k-posval">—</div><div class="sub" id="k-pos-sub">tokens held</div></div>
+  <div class="riskcell click" onclick="openPnl('port')"><div class="lbl">Total Value $ ▸ chart</div><div class="val cyan num" id="k-total">—</div><div class="sub">cash + positions</div></div>
+  <div class="riskcell click" onclick="openPnl('today')"><div class="lbl">Earned Today ▸ chart</div><div class="val up num" id="k-rew">—</div><div class="sub" id="k-pool">live rewards (USDC.e)</div></div>
   <div class="riskcell"><div class="lbl">Net Delta $</div><div class="val num" id="k-delta">—</div><div class="sub">directional exposure</div></div>
   <div class="riskcell"><div class="lbl">Max Loss</div><div class="val down num" id="k-maxloss">—</div><div class="sub">all positions → 0</div></div>
   <div class="riskcell"><div class="lbl">VaR 95% 1d</div><div class="val amber num" id="k-var">—</div><div class="sub" id="k-var-sub">—</div></div>
@@ -177,6 +179,18 @@
   <thead><tr><th class="l">MARKET</th><th>OUTCOME</th><th>SIDE</th><th>PRICE</th><th>SIZE</th><th>$ NOTIONAL</th></tr></thead>
   <tbody id="ootbody">
     <tr><td colspan="6" class="l dim" style="padding:14px 10px">no resting orders — money is all cash in the deposit wallet</td></tr>
+  </tbody>
+</table>
+
+<!-- ── Positions (filled inventory we actually hold) ── -->
+<div class="section-hdr">POSITIONS <span class="sub" id="pos-ts">— · tokens held from filled orders (not resting orders)</span></div>
+<table>
+  <thead><tr>
+    <th class="l">MARKET</th><th>OUTCOME</th><th>SIZE</th><th>AVG</th><th>NOW</th>
+    <th>VALUE $</th><th>P&amp;L $</th><th>P&amp;L %</th><th>DTE</th>
+  </tr></thead>
+  <tbody id="postbody">
+    <tr><td colspan="9" class="l dim" style="padding:14px 10px">no open positions — all money is cash + resting orders</td></tr>
   </tbody>
 </table>
 
@@ -280,18 +294,37 @@
 <div class="modal-bg" id="pnl-modal" onclick="if(event.target===this)this.classList.remove('show')">
   <div class="modal">
     <span class="x" onclick="document.getElementById('pnl-modal').classList.remove('show')">✕ close</span>
-    <h3>REWARDS EARNED TODAY — cumulative (USDC.e)</h3>
+    <h3 id="pnl-title">REWARDS EARNED — TODAY (USDC.e)</h3>
+    <div style="display:flex;gap:8px;margin:0 0 10px">
+      <button id="pnl-tab-today" class="pnl-tab active" onclick="setPnlMode('today')">Rewards today (live)</button>
+      <button id="pnl-tab-all" class="pnl-tab" onclick="setPnlMode('all')">Rewards all-time</button>
+      <button id="pnl-tab-port" class="pnl-tab" onclick="setPnlMode('port')">Portfolio value (live)</button>
+    </div>
     <canvas id="pnl-canvas" width="840" height="320"></canvas>
     <div class="sub dim" id="pnl-cap" style="padding-top:8px"></div>
   </div>
 </div>
 
+<style>
+  .pnl-tab{background:#11161d;color:#8b97a3;border:1px solid #2a3340;border-radius:4px;padding:6px 14px;font:inherit;font-size:13px;cursor:pointer}
+  .pnl-tab.active{background:#1d4ed8;color:#fff;border-color:#1d4ed8}
+</style>
 <script>
 const COL = ['#ff9e1b','#3fc1c9','#2ecc71','#b388ff','#ff6e9c','#9aa0a6'];
 function fc(v){ if(v==null) return '—'; return (v*100).toFixed(1)+'¢'; }
 function fd(v,d=2){ if(v==null) return '—'; return '$'+Number(v).toFixed(d); }
 function sgn(v){ return v>0?'+':''; }
 function cls(v){ return v>0?'up':v<0?'down':'flat'; }
+function dteStr(iso){ if(!iso) return '—'; const dd=Math.ceil((new Date(iso)-Date.now())/864e5); return isNaN(dd)?'—':dd+'d'; }
+// recommended quote price within a market's reward band: a BUY a touch inside max_spread of mid
+function recPrice(mid, maxSpreadCents, tick, side){
+  if(mid==null) return null;
+  const ms=(maxSpreadCents!=null?maxSpreadCents:2)/100, t=parseFloat(tick||0.01);
+  const off=Math.min(0.02, ms*0.5);
+  let p = side==='SELL' ? mid+off : mid-off;
+  p = Math.max(t, Math.min(1-t, Math.round(p/t)*t));
+  return +p.toFixed(4);
+}
 const prev = {};
 
 function render(d){
@@ -309,19 +342,36 @@ function render(d){
   document.getElementById('k-pol').textContent  = w.pol!=null ? w.pol.toFixed(2) : '—';
 
   const oo = d.open_orders||[];
-  document.getElementById('oo-ts').textContent = oo.length
-      ? (oo.length+' resting · invested '+fd(d.invested_usd||0))
-      : 'all cash · invested $0.00';
-  const oot = document.getElementById('ootbody');
-  oot.innerHTML = oo.length
-      ? oo.map(o=>`<tr><td class="l">${o.market}</td><td>${o.outcome}</td>`+
-          `<td class="${o.side==='BUY'?'up':'down'}">${o.side}</td>`+
-          `<td>${fc(o.price)}</td><td>${o.size}</td><td>${fd(o.price*o.size)}</td></tr>`).join('')
-      : '<tr><td colspan="6" class="l dim" style="padding:14px 10px">no resting orders — money is all cash in the deposit wallet</td></tr>';
+  if(window.OO_OPEN==null){
+    window.OO = oo;
+    document.getElementById('oo-ts').textContent = oo.length
+        ? (oo.length+' resting · invested '+fd(d.invested_usd||0)+' · click a row for details')
+        : 'all cash · invested $0.00';
+    document.getElementById('ootbody').innerHTML = oo.length
+        ? oo.map(ooRowHtml).join('')
+        : '<tr><td colspan="6" class="l dim" style="padding:14px 10px">no resting orders — money is all cash in the deposit wallet</td></tr>';
+  }
+
+  // positions (filled inventory we actually hold) — guard rebuild while a sell form is open
+  const pos = d.positions||[];
+  if(window.POS_OPEN==null){
+    window.POS = pos;
+    document.getElementById('pos-ts').textContent = pos.length
+        ? (pos.length+' held · value '+fd(d.positions_value||0)+' · P&L '+fd(d.positions_pnl||0)+' · click a row to sell')
+        : 'none · all money is cash + resting orders';
+    document.getElementById('postbody').innerHTML = pos.length
+        ? pos.map(posRowHtml).join('')
+        : '<tr><td colspan="9" class="l dim" style="padding:14px 10px">no open positions — all money is cash + resting orders</td></tr>';
+  }
 
   const r = d.risk||{};
   document.getElementById('k-aum').textContent = fd(d.invested_usd||0);
   document.getElementById('k-aum-sub').textContent = (d.open_orders||[]).length+' resting orders';
+  document.getElementById('k-posval').textContent = fd(d.positions_value||0);
+  const kps = document.getElementById('k-pos-sub');
+  kps.textContent = pos.length ? (pos.length+' held · P&L '+fd(d.positions_pnl||0)) : 'tokens held';
+  kps.className = 'sub '+(d.positions_pnl?cls(d.positions_pnl):'');
+  document.getElementById('k-total').textContent = fd(d.portfolio_total||((w.pusd||0)+(d.positions_value||0)));
   document.getElementById('k-rew').textContent = fd(d.earnings_today||0, 4);
   const kd = document.getElementById('k-delta');
   kd.textContent = fd(r.net_delta); kd.className = 'val num '+cls(r.net_delta);
@@ -458,6 +508,7 @@ function renderScreenerRows(list){
 }
 function renderScreener(d){
   if(window.SC_SEARCH) return;   // a search view is active — don't clobber it on live updates
+  if(window.SC_OPEN!=null) return; // a detail/quote form is open — don't collapse it
   const sc = d.screener||[];
   document.getElementById('sc-ts').textContent = sc.length+' reward markets · click a row';
   renderScreenerRows(sc);
@@ -478,21 +529,41 @@ window.scClearSearch = function(){
 };
 window.scToggle = function(i){
   const row=document.getElementById('scd-'+i); if(!row) return;
-  if(row.style.display!=='none'){ row.style.display='none'; return; }
-  row.style.display='';
+  const opening = row.style.display==='none';
+  document.querySelectorAll('#sctbody tr.detail').forEach(r=>r.style.display='none');
+  row.style.display = opening ? '' : 'none';
+  window.SC_OPEN = opening ? i : null;
+  if(!opening) return;
   const m=(window.SCREENER||[])[i]; if(!m) return;
   const end=m.end_date?new Date(m.end_date).toLocaleString('en-GB'):'—';
   document.getElementById('scd-box-'+i).innerHTML =
+    `<div class="meta white">${m.question||'—'}</div>`+
     `<div class="meta">CONDITION <code>${m.condition_id}</code></div>`+
     `<div class="meta">END ${end} · DTE ${m.dte!=null?m.dte+' days':'—'} · TICK ${m.tick} · MIN ${m.min_size} sh · MAX SPREAD ${m.max_spread}¢ · $${m.rate_day}/day · slug <code>${m.slug||'—'}</code></div>`+
+    `<div class="meta" id="scd-comp-${i}">COMPETITION <span class="dim">loading…</span></div>`+
     `<div class="desc">${(m.description||'no description / resolution rules').replace(/</g,'&lt;')}</div>`+
     `<div class="meta" style="margin-top:8px">QUICK-QUOTE (BUY, post-only, capped ≤$19 — unlock the control token first):</div>`+
     `<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">`+
-      `<select id="sq-out-${i}"><option value="yes">YES</option><option value="no">NO</option></select>`+
-      `<input id="sq-price-${i}" type="number" step="0.01" placeholder="price" style="width:96px"/>`+
-      `<input id="sq-size-${i}" type="number" value="${m.min_size||20}" style="width:96px"/>`+
+      `<select id="sq-out-${i}" onchange="scRec(${i})"><option value="yes">YES</option><option value="no">NO</option></select>`+
+      `<span class="sub">price</span><input id="sq-price-${i}" type="number" step="0.01" placeholder="price" style="width:96px"/>`+
+      `<button onclick="scRec(${i})" title="recommended price inside this market's reward band">Rec ✨</button>`+
+      `<span class="sub">shares</span><input id="sq-size-${i}" type="number" value="${m.min_size||20}" style="width:96px"/>`+
       `<button onclick="scQuote(${i})">Place BUY</button>`+
     `</div>`;
+  scRec(i);   // prefill recommended price
+  fetch('/market_rewards?cid='+encodeURIComponent(m.condition_id)).then(r=>r.json()).then(j=>{
+    const el=document.getElementById('scd-comp-'+i); if(!el) return;
+    const comp=j.competitiveness;
+    const lvl = comp==null?'—':(comp<=0.2?'LOW — you keep most of the pool':comp<=0.5?'MEDIUM — shared':'HIGH — split many ways');
+    const k = comp!=null&&comp<=0.2?'up':comp!=null&&comp>0.5?'down':'';
+    el.innerHTML = `COMPETITION <span class="${k}">${comp!=null?Number(comp).toFixed(3):'—'}</span> · ${lvl}`;
+  }).catch(()=>{});
+};
+window.scRec = function(i){
+  const m=(window.SCREENER||[])[i]; if(!m) return;
+  const out=document.getElementById('sq-out-'+i).value;
+  const rp = recPrice(out==='yes'?m.yes_price:m.no_price, m.max_spread, m.tick, 'BUY');
+  const inp=document.getElementById('sq-price-'+i); if(inp&&rp!=null) inp.value=rp;
 };
 window.scQuote = function(i){
   const m=(window.SCREENER||[])[i]; if(!m) return;
@@ -503,13 +574,102 @@ window.scQuote = function(i){
     size:parseFloat(document.getElementById('sq-size-'+i).value)});
 };
 
-// ── PnL / earnings chart ──
-window.openPnl = function(){ document.getElementById('pnl-modal').classList.add('show'); drawPnl(); };
+// ── positions: expandable detail + sell at chosen price ──
+function posRowHtml(p,i){
+  return `<tr class="clickable" onclick="posToggle(${i})">`+
+    `<td class="l">${(p.title||'?').slice(0,40)}</td>`+
+    `<td class="${p.outcome==='Yes'?'up':'down'}">${p.outcome}</td>`+
+    `<td>${p.size}</td><td>${fc(p.avg_price)}</td><td>${fc(p.cur_price)}</td>`+
+    `<td>${fd(p.value)}</td><td class="${cls(p.pnl)}">${fd(p.pnl)}</td>`+
+    `<td class="${cls(p.pnl)}">${p.pct_pnl>0?'+':''}${p.pct_pnl}%</td>`+
+    `<td>${dteStr(p.end_date)}</td></tr>`+
+    `<tr class="detail" id="posd-${i}" style="display:none"><td colspan="9"><div class="detail-box" id="posd-box-${i}"></div></td></tr>`;
+}
+window.posToggle = function(i){
+  const row=document.getElementById('posd-'+i); if(!row) return;
+  const opening = row.style.display==='none';
+  document.querySelectorAll('#postbody tr.detail').forEach(r=>r.style.display='none');
+  row.style.display = opening ? '' : 'none';
+  window.POS_OPEN = opening ? i : null;
+  if(!opening) return;
+  const p=(window.POS||[])[i]; if(!p) return;
+  const end=p.end_date?new Date(p.end_date).toLocaleDateString('en-GB'):'—';
+  document.getElementById('posd-box-'+i).innerHTML =
+    `<div class="meta white">${p.title||'—'}</div>`+
+    `<div class="meta">${p.outcome} · ${p.size} sh @ avg ${fc(p.avg_price)} · now ${fc(p.cur_price)} · value ${fd(p.value)} · P&L <span class="${cls(p.pnl)}">${fd(p.pnl)} (${p.pct_pnl}%)</span> · resolves ${end}${p.redeemable?' · <span class="up">REDEEMABLE</span>':''}</div>`+
+    `<div class="meta">CONDITION <code>${p.cond||'—'}</code></div>`+
+    `<div class="meta" style="margin-top:8px">SELL / CLOSE — rests as an ask at your price (a buyer lifts it); price it at/below the bid to fill now. Unlock the control token first.</div>`+
+    `<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">`+
+      `<span class="sub">price</span><input id="ps-price-${i}" type="number" step="0.01" value="${p.cur_price||''}" style="width:100px"/>`+
+      `<span class="sub">shares</span><input id="ps-size-${i}" type="number" value="${p.size}" style="width:90px"/>`+
+      `<button onclick="posSell(${i})">Sell</button>`+
+      `<button class="danger" onclick="posToggle(${i})">Close panel</button>`+
+    `</div>`;
+};
+window.posSell = function(i){
+  const p=(window.POS||[])[i]; if(!p) return;
+  if(!window.ctlPost){ alert('Unlock the control token in the CONTROLS panel first.'); return; }
+  const price=parseFloat(document.getElementById('ps-price-'+i).value);
+  const size=parseFloat(document.getElementById('ps-size-'+i).value);
+  if(!(price>0)||!(size>0)){ alert('enter a valid price and size'); return; }
+  if(confirm(`SELL ${size} ${p.outcome} @ ${price}?\n(rests as an ask if above the bid; fills immediately if at/below the bid)`)){
+    window.POS_OPEN=null;
+    window.ctlPost('/control/close_position',{token_id:p.asset, price, size});
+  }
+};
+
+// ── open orders: expandable detail with full market name ──
+function ooRowHtml(o,i){
+  return `<tr class="clickable" onclick="ooToggle(${i})">`+
+    `<td class="l">${o.market}</td><td>${o.outcome}</td>`+
+    `<td class="${o.side==='BUY'?'up':'down'}">${o.side}</td>`+
+    `<td>${fc(o.price)}</td><td>${o.size}</td><td>${fd(o.price*o.size)}</td></tr>`+
+    `<tr class="detail" id="ood-${i}" style="display:none"><td colspan="6"><div class="detail-box" id="ood-box-${i}"></div></td></tr>`;
+}
+window.ooToggle = function(i){
+  const row=document.getElementById('ood-'+i); if(!row) return;
+  const opening = row.style.display==='none';
+  document.querySelectorAll('#ootbody tr.detail').forEach(r=>r.style.display='none');
+  row.style.display = opening ? '' : 'none';
+  window.OO_OPEN = opening ? i : null;
+  if(!opening) return;
+  const o=(window.OO||[])[i]; if(!o) return;
+  document.getElementById('ood-box-'+i).innerHTML =
+    `<div class="meta white">${o.market_full||o.market}</div>`+
+    `<div class="meta">${o.side} ${o.size} ${o.outcome} @ ${fc(o.price)} · notional ${fd(o.price*o.size)} · matched ${o.matched||0} sh</div>`+
+    `<div class="meta">CONDITION <code>${o.cond||'—'}</code></div>`+
+    `<div class="meta">ASSET <code>${(o.asset||'').slice(0,20)}…</code></div>`+
+    `<div class="meta" style="margin-top:6px"><button class="danger" onclick="if(window.ctlPost){if(confirm('Cancel ALL resting orders?')){window.OO_OPEN=null;window.ctlPost('/control/cancel_all',{});}}else{alert('Unlock the control token first.');}">Cancel all orders</button></div>`;
+};
+
+// ── PnL / earnings chart (Today live  ·  All-time daily) ──
+window.PNL_MODE = 'today';
+window.openPnl = function(mode){ if(mode) window.setPnlMode(mode); document.getElementById('pnl-modal').classList.add('show'); drawPnl(); };
+window.setPnlMode = function(m){
+  window.PNL_MODE = m;
+  document.getElementById('pnl-tab-today').classList.toggle('active', m==='today');
+  document.getElementById('pnl-tab-all').classList.toggle('active', m==='all');
+  document.getElementById('pnl-tab-port').classList.toggle('active', m==='port');
+  document.getElementById('pnl-title').textContent =
+    m==='all' ? 'REWARDS EARNED — ALL-TIME cumulative (USDC.e)' :
+    m==='port'? 'PORTFOLIO VALUE — cash + positions (live)' :
+                'REWARDS EARNED — TODAY live (USDC.e)';
+  drawPnl();
+};
 function drawPnl(){
-  const d=window.LAST||{}, h=d.pnl_hist||[];
+  if(window.PNL_MODE==='all') return drawPnlAll();
+  if(window.PNL_MODE==='port') return drawPnlPort();
+  return drawPnlToday();
+}
+function _pnlBase(){
   const cv=document.getElementById('pnl-canvas'), ctx=cv.getContext('2d');
   const W=cv.width,H=cv.height,pad=46;
   ctx.fillStyle='#0a0d12'; ctx.fillRect(0,0,W,H);
+  return {ctx,W,H,pad};
+}
+function drawPnlToday(){
+  const d=window.LAST||{}, h=d.pnl_hist||[];
+  const {ctx,W,H,pad}=_pnlBase();
   document.getElementById('pnl-cap').textContent='earned today '+fd(d.earnings_today||0,4)+(h.length?(' · '+h.length+' samples'):'');
   if(h.length<2){ ctx.fillStyle='#6a6a6a'; ctx.font='14px monospace'; ctx.fillText('collecting data… (samples every 30s)',pad,H/2); return; }
   const ys=h.map(p=>p.earn), xs=h.map(p=>p.t);
@@ -520,6 +680,55 @@ function drawPnl(){
     ctx.strokeStyle='#111'; ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(W-pad,y); ctx.stroke(); }
   ctx.strokeStyle='#2ecc71'; ctx.lineWidth=2; ctx.beginPath();
   h.forEach((p,i)=>{ const x=X(p.t),y=Y(p.earn); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke();
+  ctx.fillStyle='#6a6a6a';
+  ctx.fillText(new Date(xmin*1000).toLocaleTimeString('en-GB'),pad,H-pad+18);
+  ctx.fillText(new Date(xmax*1000).toLocaleTimeString('en-GB'),W-pad-58,H-pad+18);
+}
+function drawPnlAll(){
+  const d=window.LAST||{}, h=d.earnings_history||[];
+  const {ctx,W,H,pad}=_pnlBase();
+  const total=d.earnings_alltime||0;
+  document.getElementById('pnl-cap').textContent='all-time earned '+fd(total,4)+' over '+h.length+' days · bars = per-day, line = cumulative';
+  if(h.length<1){ ctx.fillStyle='#6a6a6a'; ctx.font='14px monospace'; ctx.fillText('no earnings history yet',pad,H/2); return; }
+  const cums=h.map(p=>p.cum), days=h.map(p=>p.day);
+  const ymax=Math.max(Math.max(...cums),...days)*1.15||1;
+  const n=h.length, bw=(W-2*pad)/n;
+  const Xc=i=>pad+(i+0.5)*bw, Y=v=>H-pad-(v/ymax)*(H-2*pad);
+  ctx.fillStyle='#6a6a6a'; ctx.font='11px monospace';
+  for(let g=0;g<=4;g++){ const v=ymax*g/4,y=Y(v); ctx.fillText('$'+v.toFixed(2),4,y+4);
+    ctx.strokeStyle='#111'; ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(W-pad,y); ctx.stroke(); }
+  // per-day bars
+  ctx.fillStyle='#2b6cb0';
+  h.forEach((p,i)=>{ const x=pad+i*bw+bw*0.15, y=Y(p.day); ctx.fillRect(x,y,bw*0.7,H-pad-y); });
+  // cumulative line
+  ctx.strokeStyle='#2ecc71'; ctx.lineWidth=2; ctx.beginPath();
+  h.forEach((p,i)=>{ const x=Xc(i),y=Y(p.cum); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke();
+  // date labels (first / last)
+  ctx.fillStyle='#6a6a6a';
+  ctx.fillText(h[0].date.slice(5),pad,H-pad+18);
+  ctx.fillText(h[n-1].date.slice(5),W-pad-34,H-pad+18);
+}
+function drawPnlPort(){
+  const d=window.LAST||{}, h=d.port_hist||[];
+  const {ctx,W,H,pad}=_pnlBase();
+  const cash=(d.wallet||{}).pusd||0, posv=d.positions_value||0;
+  const tot=d.portfolio_total!=null?d.portfolio_total:(cash+posv);
+  document.getElementById('pnl-cap').textContent='total '+fd(tot)+' = cash '+fd(cash)+' + positions '+fd(posv)
+    +' · position P&L '+fd(d.positions_pnl||0)+(h.length?(' · '+h.length+' samples'):'');
+  if(h.length<2){ ctx.fillStyle='#6a6a6a'; ctx.font='14px monospace'; ctx.fillText('collecting data… (samples every 15s)',pad,H/2); return; }
+  const tots=h.map(p=>p.total), poss=h.map(p=>p.pos), xs=h.map(p=>p.t);
+  const ymax=Math.max(...tots)*1.08||1, ymin=Math.min(...poss,...tots)*0.92;
+  const xmin=xs[0], xmax=xs[xs.length-1]||xmin+1;
+  const X=t=>pad+(t-xmin)/(xmax-xmin||1)*(W-2*pad), Y=v=>H-pad-((v-ymin)/((ymax-ymin)||1))*(H-2*pad);
+  ctx.fillStyle='#6a6a6a'; ctx.font='11px monospace';
+  for(let g=0;g<=4;g++){ const v=ymin+(ymax-ymin)*g/4,y=Y(v); ctx.fillText('$'+v.toFixed(2),4,y+4);
+    ctx.strokeStyle='#111'; ctx.beginPath(); ctx.moveTo(pad,y); ctx.lineTo(W-pad,y); ctx.stroke(); }
+  ctx.strokeStyle='#2b6cb0'; ctx.lineWidth=1.5; ctx.beginPath();
+  h.forEach((p,i)=>{ const x=X(p.t),y=Y(p.pos); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke();
+  ctx.strokeStyle='#3fc1c9'; ctx.lineWidth=2; ctx.beginPath();
+  h.forEach((p,i)=>{ const x=X(p.t),y=Y(p.total); i?ctx.lineTo(x,y):ctx.moveTo(x,y); }); ctx.stroke();
+  ctx.fillStyle='#3fc1c9'; ctx.fillText('total value',W-pad-72,Y(tots[tots.length-1])-6);
+  ctx.fillStyle='#2b6cb0'; ctx.fillText('positions',W-pad-66,Y(poss[poss.length-1])+14);
   ctx.fillStyle='#6a6a6a';
   ctx.fillText(new Date(xmin*1000).toLocaleTimeString('en-GB'),pad,H-pad+18);
   ctx.fillText(new Date(xmax*1000).toLocaleTimeString('en-GB'),W-pad-58,H-pad+18);

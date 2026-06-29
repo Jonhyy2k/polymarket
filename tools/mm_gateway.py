@@ -58,6 +58,7 @@ class Caps:
     max_open_orders: int = 8
     dms_seconds: float = 20.0         # cancel-all if md stale this long
     interval: float = 5.0             # loop period
+    gtd_expiry: float = 120.0         # seconds: orders auto-expire if we go silent
 
 
 @dataclass
@@ -173,10 +174,15 @@ class Gateway:
             try:
                 neg = self.c.get_neg_risk(token)
                 ts = self.c.get_tick_size(token)
+                # GTD: the order auto-expires after gtd_expiry seconds. If this
+                # process (or the whole box) dies, resting orders die with it
+                # within ~gtd_expiry — they can never sit naked overnight again.
+                exp = int(time.time() + self.caps.gtd_expiry)
                 resp = self.c.create_and_post_order(
-                    OrderArgsV2(token_id=token, price=price, size=size, side=side),
+                    OrderArgsV2(token_id=token, price=price, size=size, side=side,
+                                expiration=exp),
                     options=PartialCreateOrderOptions(tick_size=ts, neg_risk=neg),
-                    order_type=OrderType.GTC, post_only=True)
+                    order_type=OrderType.GTD, post_only=True)
                 ok = isinstance(resp, dict) and resp.get("success")
                 log(f"  {'OK ' if ok else 'ERR'} {tag} -> {resp}")
             except Exception as e:
@@ -214,6 +220,8 @@ def main():
     ap.add_argument("--max-order-notional", type=float, default=5.0)
     ap.add_argument("--max-total-notional", type=float, default=20.0)
     ap.add_argument("--interval", type=float, default=5.0)
+    ap.add_argument("--gtd-expiry", type=float, default=120.0,
+                    help="seconds until a resting order auto-expires (dead-process safety)")
     ap.add_argument("--duration", type=float, default=0.0, help="auto stop+flatten after N s (0=forever)")
     ap.add_argument("--live", action="store_true", help="actually place orders (default: dry-run)")
     a = ap.parse_args()
@@ -225,12 +233,12 @@ def main():
                         signature_type=3, funder=DEPOSIT_WALLET)
     caps = Caps(size=a.size, half_spread=a.half_spread,
                 max_order_notional=a.max_order_notional, max_total_notional=a.max_total_notional,
-                interval=a.interval)
+                interval=a.interval, gtd_expiry=a.gtd_expiry)
     markets = load_markets([int(x) for x in a.contracts.split(",")])
 
     log(f"mode={'LIVE' if a.live else 'DRY-RUN'} | funder={DEPOSIT_WALLET} | "
         f"markets={[m.name for m in markets]} | size={caps.size} hs={caps.half_spread} "
-        f"caps: order≤${caps.max_order_notional} total≤${caps.max_total_notional}")
+        f"GTD={caps.gtd_expiry:.0f}s | caps: order≤${caps.max_order_notional} total≤${caps.max_total_notional}")
 
     gw = Gateway(client, markets, caps, a.live)
     # cancel-all on every exit path
