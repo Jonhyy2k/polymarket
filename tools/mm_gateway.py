@@ -20,7 +20,7 @@ Usage (DRY-RUN by default — builds quotes, posts NOTHING):
     PYTHONPATH=./.pmlibs python3 tools/mm_gateway.py --contracts 0 --size 5 --duration 60
 Add --live to actually place orders. Add --duration N to auto-stop+flatten after N s.
 """
-import argparse, atexit, json, os, signal, sys, time
+import argparse, atexit, json, os, signal, sys, time, urllib.request
 from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".pmlibs"))
@@ -73,14 +73,28 @@ def log(msg):
 
 
 class Gateway:
-    def __init__(self, client, markets, caps: Caps, live: bool):
+    def __init__(self, client, markets, caps: Caps, live: bool, skew: bool = True):
         self.c = client
         self.markets = markets
         self.caps = caps
         self.live = live
+        self.skew = skew            # don't add to a side we already hold inventory in
         self.last_md_ok = time.time()
         self.last_mid = {}          # token_id -> last mid we quoted around
         self._flattened = False
+
+    def held_tokens(self):
+        """Tokens we currently hold inventory in (asset_id -> size), via data-api."""
+        if not self.skew:
+            return {}
+        try:
+            url = f"https://data-api.polymarket.com/positions?user={DEPOSIT_WALLET}"
+            req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+            data = json.loads(urllib.request.urlopen(req, timeout=8).read())
+            return {p.get("asset"): float(p.get("size", 0) or 0)
+                    for p in (data or []) if float(p.get("size", 0) or 0) > 0.5}
+        except Exception:
+            return {}
 
     # ---- safety ----------------------------------------------------------
     def flatten(self, reason=""):
@@ -126,10 +140,14 @@ class Gateway:
             return  # md error already logged; DMS will trip if it persists
         total_notional = sum(float(o["price"]) * float(o["original_size"]) for o in live_orders)
 
+        held = self.held_tokens()      # inventory skew: never add to a side we hold
         desired = []   # (token, side, price, size)
         for mk in self.markets:
             try:
                 for token in (mk.yes, mk.no):
+                    if held.get(token, 0) > 0.5:
+                        log(f"skew: hold {held[token]:.0f} of tok…{token[-6:]}, skip its BUY")
+                        continue
                     mid = self.mid(token)
                     tick = float(self.c.get_tick_size(token))
                     bid = self.round_tick(mid - caps.half_spread, tick)
@@ -224,6 +242,7 @@ def main():
                     help="seconds until a resting order auto-expires (dead-process safety)")
     ap.add_argument("--duration", type=float, default=0.0, help="auto stop+flatten after N s (0=forever)")
     ap.add_argument("--live", action="store_true", help="actually place orders (default: dry-run)")
+    ap.add_argument("--no-skew", action="store_true", help="disable inventory skew (allow adding to held sides)")
     a = ap.parse_args()
 
     env = read_env(CREDS_FILE)
@@ -240,7 +259,8 @@ def main():
         f"markets={[m.name for m in markets]} | size={caps.size} hs={caps.half_spread} "
         f"GTD={caps.gtd_expiry:.0f}s | caps: order≤${caps.max_order_notional} total≤${caps.max_total_notional}")
 
-    gw = Gateway(client, markets, caps, a.live)
+    gw = Gateway(client, markets, caps, a.live, skew=not a.no_skew)
+    log(f"inventory skew: {'ON' if gw.skew else 'OFF'}")
     # cancel-all on every exit path
     atexit.register(lambda: gw.flatten("exit") if a.live else None)
     for sig in (signal.SIGINT, signal.SIGTERM):

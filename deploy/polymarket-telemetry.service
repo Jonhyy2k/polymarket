@@ -1,0 +1,16 @@
+[Unit]
+Description=Polymarket fill telemetry (adverse-selection mark-outs)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/polymarket
+Environment=PYTHONPATH=/home/ubuntu/polymarket/.pmlibs
+ExecStart=/usr/bin/python3 tools/fill_telemetry.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
