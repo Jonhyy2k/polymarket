@@ -187,6 +187,38 @@ Fills are inevitable; mishandling them is the whole risk. The discipline, in ord
 > orders and it has no sell logic. Either the bot does it automatically (the next build) or
 > you turn the MM **off** and manage manually. Never both.
 
+### 3.5b The legged fill, in depth — patience, the reward cushion, reversion
+A one-sided ("legged") fill is **not automatically a loss** — it's *half a round-trip waiting
+for the other half.* The drawdown while you wait is **unrealized** (it only becomes real if
+you sell into it, it trends, or it resolves against you), and **you keep earning LP rewards**
+the whole time. So the patient play is usually:
+
+> Hold the leg (skew) → keep quoting the other side → **let rewards accrue while you wait for
+> the market to oscillate back** → if it reverts, the other leg fills and you complete the
+> risk-free <$1 set (+ all the rewards banked); if it trends, the stop cuts it small.
+
+**The rewards are the cushion that buys you the patience to let oscillation finish the
+round-trip.** This works precisely when, and only when:
+
+| Condition | Needed because |
+|---|---|
+| **market reverts (range-bound, not trending)** | the second leg fills only if price oscillates back |
+| **reward rate ≥ adverse-selection bleed rate** | the cushion must outpace the drawdown while you wait (the measurable break-even) |
+| **you're not forced out** (DTE far, no premature stop) | a reverting drawdown is harmless *if you can wait it out* |
+
+Caveat: while legged you earn the **one-sided** (reduced) reward, not the full two-sided rate,
+so the cushion is smaller until the hedge completes — and capital is locked while you wait.
+
+**Numeric feel.** NO fills @ 0.59 (20 NO = $11.80); NO dips to 0.55 → −$0.80 *unrealized*, but
+you keep resting BUY YES + earning rewards.
+- *Reverts:* NO back to ~0.59, YES dips into your 0.36 bid → hedged set for ~0.95 → **+$0.05 +
+  rewards**; the −$0.80 never happened.
+- *Trends:* NO keeps falling, YES never fills → bleed > rewards → **stop-loss cuts it small.**
+
+**Implication for selection:** favour **range-bound, liquid, low-drama** markets (more
+reversion, smaller swings, both legs fill) over **event-driven / trending** ones (one-way
+moves leg you and don't come back). The reward-vs-bleed inequality is the number to measure.
+
 ### 3.6 Order types (know which to use)
 | Type | Behaviour | Use for |
 |---|---|---|
