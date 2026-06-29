@@ -134,6 +134,7 @@ def cycle(c, seen, pending):
             log(f"skip stale fill {fobj['side']} {fobj['outcome']} @{fobj['price']} (age {int(now0-fobj['ts'])}s)")
             continue
         rec = dict(fobj)
+        rec["fill_ts"] = fobj["ts"]; rec["fill_price"] = fobj["price"]   # CSV column names
         rec["mid_0"] = midpoint(c, fobj["asset"])
         rec["samples"] = {}          # horizon -> mid
         pending.append(rec)
