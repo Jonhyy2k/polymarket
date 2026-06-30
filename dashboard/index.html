@@ -153,24 +153,38 @@
   <thead>
     <tr>
       <th class="l">MARKET</th>
-      <th>YES</th>
-      <th>Δ SESS</th>
-      <th>HI</th>
-      <th>LO</th>
-      <th>NO</th>
-      <th>BID</th>
-      <th>ASK</th>
-      <th>SPR</th>
-      <th>QMIN</th>
-      <th>POOL/D</th>
-      <th>EST·R</th>
-      <th>POS</th>
-      <th>ST</th>
+      <th title="YES outcome mid-price (midpoint of bid & ask)">YES</th>
+      <th title="Δ SESS = change in the YES mid-price since this dashboard session started. + = YES drifted up, − = down.">Δ SESS</th>
+      <th title="Session high of YES mid">HI</th>
+      <th title="Session low of YES mid">LO</th>
+      <th title="NO outcome mid-price">NO</th>
+      <th title="Best bid for YES (price you could SELL YES into)">BID</th>
+      <th title="Best ask for YES (price you could BUY YES at)">ASK</th>
+      <th title="SPR = spread = ask − bid, in cents. Tighter = more liquid / easier to exit.">SPR</th>
+      <th title="Reward-scoring constant used to estimate your share (legacy arb-engine metric)">QMIN</th>
+      <th title="Total daily reward pool for this market (USDC/day)">POOL/D</th>
+      <th title="Rough estimate of your daily reward (legacy)">EST·R</th>
+      <th title="Your net position (shares held) in this market">POS</th>
+      <th title="ST = status. ● green = both YES & NO sides reward-eligible · ○ amber = not eligible · ! red = position at risk.">ST</th>
     </tr>
   </thead>
   <tbody id="mtbody">
     <tr><td colspan="14" class="l dim" style="padding:14px 10px">awaiting feed…</td></tr>
   </tbody>
+</table>
+
+<!-- ── Watchlist ── -->
+<div class="section-hdr">WATCHLIST <span class="sub" id="wl-ts">— · ★ any market from the screener below to pin it here · ✦ = you hold a position</span></div>
+<table>
+  <thead><tr>
+    <th class="l">MARKET</th><th>YES / NO</th>
+    <th title="Exitability rating">EXIT</th><th title="Daily reward pool">$/DAY</th>
+    <th title="Book spread (cents)">SPR¢</th><th title="Touch depth (shares)">DEPTH</th>
+    <th title="Reward band (cents from mid)">BAND¢</th><th title="Min order size for rewards">MIN</th>
+    <th title="Cost to quote both sides at min size">2-SIDE $</th><th title="Days to resolution">DTE</th>
+    <th title="remove from watchlist">✕</th>
+  </tr></thead>
+  <tbody id="wltbody"><tr><td colspan="11" class="l dim" style="padding:14px 10px">no watched markets — click ☆ on a screener row to add one</td></tr></tbody>
 </table>
 
 <!-- ── Open orders ── -->
@@ -202,6 +216,22 @@
     <th>$/DAY</th><th>DTE</th><th>COMPETITION</th><th>EARNED TODAY</th><th>RATE Δ</th>
   </tr></thead>
   <tbody id="rwtbody"><tr><td colspan="9" class="l dim" style="padding:14px 10px">loading reward config…</td></tr></tbody>
+</table>
+
+<!-- ── History & P&L ── -->
+<div class="section-hdr">HISTORY &amp; P&amp;L <span class="sub" id="hist-ts">— · full account ledger &amp; consolidated profit/loss</span></div>
+<div class="riskgrid" style="margin-bottom:6px">
+  <div class="riskcell"><div class="lbl">Total Value</div><div class="val white num" id="h-total">—</div><div class="sub" id="h-total-sub">cash + positions</div></div>
+  <div class="riskcell"><div class="lbl">Rewards (all-time)</div><div class="val up num" id="h-rew">—</div><div class="sub">LP rewards banked — reliable</div></div>
+  <div class="riskcell"><div class="lbl">Unrealized P&amp;L</div><div class="val num" id="h-unreal">—</div><div class="sub">open positions, at MARK (thin books overstate)</div></div>
+  <div class="riskcell"><div class="lbl">Portfolio chart</div><div class="val num" style="font-size:14px"><span class="clickable" style="cursor:pointer;color:#4a9eff" onclick="openPnl('port')">open ▸</span></div><div class="sub">value over time</div></div>
+</div>
+<table>
+  <thead><tr>
+    <th class="l">WHEN</th><th>TYPE</th><th class="l">MARKET</th><th>OUTCOME</th>
+    <th>SIDE</th><th>SIZE</th><th>PRICE</th><th>$ USDC</th>
+  </tr></thead>
+  <tbody id="histbody"><tr><td colspan="8" class="l dim" style="padding:14px 10px">loading account history…</td></tr></tbody>
 </table>
 
 <!-- ── Controls ── -->
@@ -256,13 +286,25 @@
     style="width:460px;background:#0c1015;color:#cfd6dd;border:1px solid #2a3340;border-radius:4px;padding:8px 11px;font:inherit;font-size:14px"/>
   <button onclick="scSearch()" style="background:#1d4ed8;color:#fff;border:0;border-radius:4px;padding:8px 16px;font:inherit;font-size:13px;cursor:pointer">Search</button>
   <button onclick="scClearSearch()" style="background:#2a3340;color:#cfd6dd;border:0;border-radius:4px;padding:8px 16px;font:inherit;font-size:13px;cursor:pointer">Clear</button>
+  <label style="margin-left:auto;display:flex;gap:6px;align-items:center;font-size:13px;color:#cfd6dd;cursor:pointer;user-select:none">
+    <input type="checkbox" id="sc-afford" onchange="scAffordToggle()" style="cursor:pointer"/>
+    Affordable two-sided <span class="dim" id="sc-afford-cash">@ my cash</span>
+  </label>
 </div>
 <table>
   <thead><tr>
-    <th class="l">#</th><th class="l">MARKET</th><th>YES / NO</th><th>EXIT</th><th>$/DAY</th>
-    <th>SPR¢</th><th>DEPTH</th><th>BAND¢</th><th>MIN</th><th>DTE</th>
+    <th class="l">#</th><th class="l">MARKET</th><th>YES / NO</th>
+    <th title="EXITABILITY — how easily you can get OUT of a position. Rating = reward-rate × book-tightness × touch-depth. GOOD = tight & deep, POOR = wide/thin (a trap, like Micron was).">EXIT</th>
+    <th title="Total daily reward pool for this market (USDC/day)">$/DAY</th>
+    <th title="Live order-book spread in cents (best ask − best bid). Tighter = easier to exit.">SPR¢</th>
+    <th title="Shares resting at the best bid/ask (touch depth). More = easier to get filled & to exit.">DEPTH</th>
+    <th title="BAND = reward band = the max distance from mid-price (in cents) your quote can sit and STILL earn rewards. Quote outside the band = no reward.">BAND¢</th>
+    <th title="Minimum order size (shares) required to qualify for rewards in this market">MIN</th>
+    <th title="Capital needed to quote MIN size on BOTH sides at once (≈ what you must commit to earn rewards here). Green ✓ = fits your current cash.">2-SIDE $</th>
+    <th title="Days to market resolution">DTE</th>
+    <th title="★ add this market to your Watchlist">★</th>
   </tr></thead>
-  <tbody id="sctbody"><tr><td colspan="10" class="l dim" style="padding:14px">loading screener…</td></tr></tbody>
+  <tbody id="sctbody"><tr><td colspan="12" class="l dim" style="padding:14px">loading screener…</td></tr></tbody>
 </table>
 
 <!-- ── Risk ── -->
@@ -302,6 +344,7 @@
     </div>
     <canvas id="pnl-canvas" width="840" height="320"></canvas>
     <div class="sub dim" id="pnl-cap" style="padding-top:8px"></div>
+    <div class="sub" id="pnl-break" style="padding-top:6px"></div>
   </div>
 </div>
 
@@ -449,6 +492,8 @@ function render(d){
   }).join('') || '<tr><td colspan="9" class="dim l">no markets</td></tr>';
 
   renderScreener(d);
+  renderHistory(d);
+  renderWatchlistRows();
 
   // populate control dropdowns once markets arrive
   window.MKTS = mkts;
@@ -487,10 +532,14 @@ function render(d){
 }
 
 // ── screener ──
+function scCash(){ return (window.LAST&&window.LAST.wallet&&window.LAST.wallet.pusd)||0; }
 function scRowHtml(m,i){
   const dte = m.dte!=null?(m.dte+'d'):'—';
   const ex = m.exit_label||'?';
   const exCls = ex==='GOOD'?'up':ex==='POOR'?'down':ex==='OK'?'amber':'dim';
+  const c2 = m.two_sided_cost;
+  const aff = c2!=null && c2<=scCash();
+  const c2cell = c2!=null ? `<span class="${aff?'up':'down'}">$${c2}${aff?' ✓':''}</span>` : '<span class="dim">—</span>';
   return `<tr class="clickable" onclick="scToggle(${i})">`+
     `<td class="l dim">${i+1}</td>`+
     `<td class="l white">${(m.question||'—')}${m.neg_risk?'<span class="dim"> ·neg</span>':''}</td>`+
@@ -501,20 +550,32 @@ function scRowHtml(m,i){
     `<td class="num">${m.depth!=null?m.depth:'—'}</td>`+
     `<td class="num dim">${m.max_spread!=null?m.max_spread+'¢':'—'}</td>`+
     `<td class="num">${m.min_size??'—'}</td>`+
-    `<td class="num">${dte}</td></tr>`+
-    `<tr class="detail" id="scd-${i}" style="display:none"><td colspan="10"><div class="detail-box" id="scd-box-${i}"></div></td></tr>`;
+    `<td class="num">${c2cell}</td>`+
+    `<td class="num">${dte}</td>`+
+    `<td class="num"><span style="cursor:pointer" title="add/remove from Watchlist" onclick="event.stopPropagation();watchToggle('${m.condition_id}')">${isWatched(m.condition_id)?'★':'☆'}</span></td></tr>`+
+    `<tr class="detail" id="scd-${i}" style="display:none"><td colspan="12"><div class="detail-box" id="scd-box-${i}"></div></td></tr>`;
 }
 function renderScreenerRows(list){
+  if(window.SC_AFFORD){
+    const cash = scCash();
+    list = list.filter(m=>m.two_sided_cost!=null && m.two_sided_cost<=cash);
+  }
   window.SCREENER = list;
   const tb = document.getElementById('sctbody');
   tb.innerHTML = list.length ? list.map(scRowHtml).join('')
-    : '<tr><td colspan="10" class="l dim" style="padding:14px">no markets</td></tr>';
+    : `<tr><td colspan="12" class="l dim" style="padding:14px">${window.SC_AFFORD?'no reward market is affordable two-sided at your current cash — this is the signal to add capital':'no markets'}</td></tr>`;
 }
+window.scAffordToggle = function(){
+  window.SC_AFFORD = document.getElementById('sc-afford').checked;
+  const src = window.SC_SEARCH || (window.LAST&&window.LAST.screener) || [];
+  renderScreenerRows(src);
+};
 function renderScreener(d){
   if(window.SC_SEARCH) return;   // a search view is active — don't clobber it on live updates
   if(window.SC_OPEN!=null) return; // a detail/quote form is open — don't collapse it
   const sc = d.screener||[];
   document.getElementById('sc-ts').textContent = sc.length+' markets · ranked by EXIT score (tradeable reward) · click a row';
+  const cashEl = document.getElementById('sc-afford-cash'); if(cashEl) cashEl.textContent = '@ '+fd(scCash())+' cash';
   renderScreenerRows(sc);
 }
 window.scSearch = async function(){
@@ -531,6 +592,79 @@ window.scClearSearch = function(){
   window.SC_SEARCH = null;
   if(window.LAST) renderScreener(window.LAST);
 };
+
+// ── watchlist (stored in the browser; data resolved live via /watchrows) ──
+function getWatch(){ try{ return JSON.parse(localStorage.getItem('pm_watch')||'[]'); }catch(e){ return []; } }
+function setWatch(a){ localStorage.setItem('pm_watch', JSON.stringify(a)); }
+function isWatched(cond){ return getWatch().includes(cond); }
+window.watchToggle = function(cond){
+  if(!cond) return;
+  let w = getWatch();
+  w = w.includes(cond) ? w.filter(c=>c!==cond) : w.concat([cond]);
+  setWatch(w);
+  refreshWatch();                          // pull fresh rows
+  if(window.LAST) renderScreener(window.LAST);  // update the ☆/★ on screener
+};
+async function refreshWatch(){
+  const w = getWatch();
+  if(!w.length){ window.WATCHROWS = []; renderWatchlistRows(); return; }
+  try{
+    const res = await (await fetch('/watchrows?conds='+encodeURIComponent(w.join(',')))).json();
+    window.WATCHROWS = res;
+  }catch(e){ /* keep last */ }
+  renderWatchlistRows();
+}
+function renderWatchlistRows(){
+  const tb = document.getElementById('wltbody'); if(!tb) return;
+  const rows = window.WATCHROWS||[];
+  const cash = (window.LAST&&window.LAST.wallet&&window.LAST.wallet.pusd)||0;
+  const posByCond = {}; ((window.LAST&&window.LAST.positions)||[]).forEach(p=>{ posByCond[p.cond]=p; });
+  document.getElementById('wl-ts').textContent = (getWatch().length)+' watched · ✦ = position held · ★ on screener rows to add/remove';
+  if(!rows.length){ tb.innerHTML='<tr><td colspan="11" class="l dim" style="padding:14px 10px">no watched markets — click ☆ on a screener row to add one</td></tr>'; return; }
+  tb.innerHTML = rows.map(m=>{
+    const ex=m.exit_label||'?', exCls=ex==='GOOD'?'up':ex==='POOR'?'down':ex==='OK'?'amber':'dim';
+    const c2=m.two_sided_cost, aff=c2!=null&&c2<=cash;
+    const held=posByCond[m.condition_id];
+    return `<tr>`+
+      `<td class="l white">${held?'<span class="up" title="you hold a position">✦ </span>':''}${m.question||'—'}</td>`+
+      `<td class="num cyan">${fc(m.yes_price)} / ${fc(m.no_price)}</td>`+
+      `<td class="num ${exCls}">${ex}</td>`+
+      `<td class="num up">$${m.rate_day}</td>`+
+      `<td class="num">${m.spread_c!=null?m.spread_c+'¢':'—'}</td>`+
+      `<td class="num">${m.depth!=null?m.depth:'—'}</td>`+
+      `<td class="num dim">${m.max_spread!=null?m.max_spread+'¢':'—'}</td>`+
+      `<td class="num">${m.min_size??'—'}</td>`+
+      `<td class="num ${aff?'up':'down'}">${c2!=null?'$'+c2:'—'}</td>`+
+      `<td class="num">${m.dte!=null?m.dte+'d':'—'}</td>`+
+      `<td class="num"><span style="cursor:pointer" title="remove" onclick="watchToggle('${m.condition_id}')">✕</span></td></tr>`;
+  }).join('');
+}
+
+// ── history & consolidated P&L ──
+function renderHistory(d){
+  const s = d.pnl_summary||{};
+  const ht=document.getElementById('h-total'); if(ht) ht.textContent = fd(s.total_value);
+  const hsub=document.getElementById('h-total-sub'); if(hsub) hsub.textContent = 'cash '+fd(s.cash)+' + positions '+fd(s.pos_value);
+  const hr=document.getElementById('h-rew'); if(hr) hr.textContent = fd(s.rewards,4);
+  const hu=document.getElementById('h-unreal'); if(hu){ hu.textContent = fd(s.unrealized); hu.className='val num '+cls(s.unrealized); }
+  const acts = d.activity||[];
+  document.getElementById('hist-ts').textContent = acts.length+' ledger events · TRADE / REDEEM / REWARD';
+  const tb=document.getElementById('histbody');
+  const typeCls={TRADE:'cyan',REDEEM:'up',REWARD:'up',CONVERSION:'amber',SPLIT:'dim',MERGE:'dim'};
+  tb.innerHTML = acts.length ? acts.slice(0,60).map(a=>{
+    const when = a.ts?new Date(a.ts*1000).toLocaleString('en-GB',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
+    const sideCls = a.side==='SELL'?'down':a.side==='BUY'?'up':'';
+    return `<tr>`+
+      `<td class="l dim">${when}</td>`+
+      `<td class="${typeCls[a.type]||''}">${a.type||'—'}</td>`+
+      `<td class="l white">${a.title||'—'}</td>`+
+      `<td>${a.outcome||'—'}</td>`+
+      `<td class="${sideCls}">${a.side||'—'}</td>`+
+      `<td class="num">${a.size!=null?a.size:'—'}</td>`+
+      `<td class="num">${a.price!=null?fc(a.price):'—'}</td>`+
+      `<td class="num">${fd(a.usd)}</td></tr>`;
+  }).join('') : '<tr><td colspan="8" class="l dim" style="padding:14px 10px">no activity yet</td></tr>';
+}
 window.scToggle = function(i){
   const row=document.getElementById('scd-'+i); if(!row) return;
   const opening = row.style.display==='none';
@@ -662,9 +796,20 @@ window.setPnlMode = function(m){
   drawPnl();
 };
 function drawPnl(){
+  renderPnlBreak();
   if(window.PNL_MODE==='all') return drawPnlAll();
   if(window.PNL_MODE==='port') return drawPnlPort();
   return drawPnlToday();
+}
+function renderPnlBreak(){
+  const el=document.getElementById('pnl-break'); if(!el) return;
+  // rewards are paid per MARKET (not per outcome) — show which market paid today
+  if(window.PNL_MODE==='port'){ el.innerHTML=''; return; }
+  const bm=(window.LAST||{}).earnings_by_market||[];
+  if(!bm.length){ el.innerHTML='<span class="dim">by market today: none yet</span>'; return; }
+  el.innerHTML='<span class="dim">by market today:</span> '+bm.map(r=>
+    `<span class="white">${(r.name||'?')}</span> <span class="up">${fd(r.earn,4)}</span>`
+  ).join(' &nbsp;·&nbsp; ');
 }
 function _pnlBase(){
   const cv=document.getElementById('pnl-canvas'), ctx=cv.getContext('2d');
@@ -790,6 +935,8 @@ function connect(){
 }
 connect();
 setInterval(async()=>{ try{ render(await (await fetch('/state')).json()); }catch(_){} }, 30000);
+refreshWatch();                       // load watchlist on startup
+setInterval(refreshWatch, 30000);     // keep watchlist prices fresh
 </script>
 </body>
 </html>

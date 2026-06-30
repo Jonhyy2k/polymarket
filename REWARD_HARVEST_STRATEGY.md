@@ -295,3 +295,41 @@ Two instruments are live; one piece (automated fill-handling) is the next build.
 3. **Automated fill-handling (next).** Inventory **skew** (stop quoting the filled side) →
    **fast scratch** (exit at ≥ fill) → **stop-loss** → **DTE flatten**, gated off by default
    and dry-runnable. Pairs with the first measured live pilot in a GOOD-exit market.
+
+## 15. Pilot-2 outcome + the affordability filter (2026-06-30)
+
+Pilot 2 ran in the **rials** market ("USD fall to 1.4M Iranian rials", $5/day pool, chosen
+for *low competition* comp 0.13). It taught three things, in order of importance:
+
+1. **`min_size × price` two-sided is THE filter for a small account — not competition.**
+   Selecting rials for low competition was a mistake: I under-weighted that its **pool is
+   $5/day** and its **reward `min_size` is 50** (we quoted 20). A small account's binding
+   constraint is *"can I even afford to rest `min_size` on both legs?"* — cost ≈
+   `min_size × (yes+no) ≈ min_size` dollars. The dashboard screener now computes a
+   **`2-SIDE $`** column and an **"Affordable two-sided @ my cash"** toggle. Verdict at
+   ~$21 cash: **only 4 of 60 reward markets are affordable two-sided.** The fat pools
+   (France WC **$4,528/day**, Fed $1,296, …) all sit behind `min_size 200` = **$200**
+   two-sided. This maps the capital ladder precisely: **€80–100 unlocks the min-50 / ~$640
+   tier; €200+ unlocks the $1–4.5k/day min-200 mega-pools.** That is the data-backed
+   fund-or-not signal — when nothing decent is affordable, *that* is the cue to add capital.
+
+2. **We were in the wrong market the whole time.** Hormuz (pilot-1's market) pays
+   **$300/day**, `min_size 20` (affordable at $20 two-sided), GOOD 1¢ book — **60× the rials
+   pool for identical capital.** The per-market earnings ledger confirmed rials only ever paid
+   ~$0.03–0.26/day. Lesson: **pool size first, then exitability, then competition** — never
+   competition first.
+
+3. **The legged set completed and locked risk-free — small but mechanically correct.**
+   The waiting NO leg filled and we now hold **20 YES @ 0.16 + 20 NO @ 0.80 = 20 complete
+   sets @ $0.96**, redeeming for $20 at resolution → **+$0.80 locked, outcome-independent.**
+   Note the fill price: the NO bid hit the **$16 order cap** (20 × 0.80), so it filled at
+   exactly 0.80 — *the cap is what kept the set under $1.* The honest read: a risk-free +$0.80
+   that **freezes ~$19 (your whole stack) in a dead-pool market until resolution** is *working,
+   not winning.* Velocity × pool size is what turns a correct mechanic into money — the case
+   for the injection. Don't sell the legs back on a thin book (crossing the spread loses ~$4);
+   hold to resolution or merge on-chain (the latter needs the auth-RPC path we haven't validated).
+
+**Dashboard shipped alongside (2026-06-30):** affordability filter; orders/rewards now resolve
+market names; per-market reward breakdown; persistent portfolio chart; **Watchlist** (★ pin
+markets); **History & P&L** section (consolidated summary + on-chain activity ledger); column
+tooltips + `DASHBOARD_GUIDE.md` glossary. See [DASHBOARD_GUIDE.md](DASHBOARD_GUIDE.md).

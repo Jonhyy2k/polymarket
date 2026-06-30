@@ -137,7 +137,44 @@ state = {
     "earnings_hist_ts": None,
     # portfolio value time series (cash + position value + position P&L) for the chart
     "port_hist":        deque(maxlen=500),
+    # per-market reward breakdown for "today" (which market paid what)
+    "earnings_by_market": [],
+    # account activity ledger (trades / redeems / rewards) + consolidated P&L
+    "activity":         [],
+    "activity_ts":      None,
+    "pnl_summary":      {},
 }
+
+# Persist the portfolio-value series to disk so a dashboard restart (e.g. after a
+# config change adds a market) doesn't wipe the chart's history. Best-effort.
+PORT_HIST_FILE = BASE_DIR / "logs" / "port_hist.json"
+try:
+    for _p in (json.load(open(PORT_HIST_FILE)) or [])[-500:]:
+        state["port_hist"].append(_p)
+except Exception:
+    pass
+
+def _save_port_hist():
+    try:
+        PORT_HIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        tmp = PORT_HIST_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(list(state["port_hist"])))
+        tmp.replace(PORT_HIST_FILE)
+    except Exception:
+        pass
+
+def _cond_name(cond: str):
+    """Resolve a condition_id (rewards row) to a human market name when we know it."""
+    if not cond:
+        return None
+    c = cond.lower()
+    for m in MARKETS:
+        if str(m.get("condition_id", "")).lower() == c:
+            return m["name"]
+    for r in _SCREENER_ALL:
+        if str(r.get("condition_id", "")).lower() == c:
+            return r.get("question")
+    return None
 
 _clients: Set[WebSocket] = set()
 
@@ -288,9 +325,58 @@ async def _poll_positions():
                 state["port_hist"].append({"t": int(_t.time()), "total": round(cash + pv, 2),
                                            "cash": round(cash, 2), "pos": round(pv, 2),
                                            "pnl": state.get("positions_pnl", 0.0)})
+                _save_port_hist()
         except Exception:
             pass
         await asyncio.sleep(15)
+
+# ─── Account history (activity ledger) + consolidated P&L ──────────────────────
+# data-api /activity is the on-chain ledger: TRADE / REDEEM / REWARD / CONVERSION /
+# SPLIT / MERGE rows with usdc amounts. We surface it as a "history" feed and roll a
+# consolidated P&L: rewards (reliable) + realized trading + unrealized (mark, caveat).
+def _read_activity():
+    try:
+        url = f"https://data-api.polymarket.com/activity?user={DEPOSIT_WALLET}&limit=200"
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=12) as r:
+            raw = json.loads(r.read())
+        acts = []
+        for a in (raw or []):
+            acts.append({
+                "ts":      a.get("timestamp"),
+                "type":    a.get("type"),            # TRADE / REDEEM / REWARD / …
+                "title":   a.get("title") or "?",
+                "outcome": a.get("outcome"),
+                "side":    a.get("side"),            # BUY / SELL (trades only)
+                "size":    a.get("size"),
+                "usd":     round(float(a.get("usdcSize", 0) or 0), 2),
+                "price":   a.get("price"),
+                "cond":    a.get("conditionId"),
+                "tx":      a.get("transactionHash"),
+            })
+        state["activity"] = acts
+        state["activity_ts"] = datetime.now(timezone.utc).isoformat()
+    except Exception:
+        pass
+    # consolidated P&L summary (best-effort, labelled honestly on the frontend)
+    try:
+        pos = state.get("positions", [])
+        unreal = round(sum(float(p.get("pnl", 0) or 0) for p in pos), 2)   # current mark P&L
+        rewards = float(state.get("earnings_alltime", 0) or 0)
+        state["pnl_summary"] = {
+            "rewards":    round(rewards, 4),
+            "unrealized": unreal,
+            "cash":       round(float(state.get("pusd") or 0), 2),
+            "pos_value":  round(float(state.get("positions_value") or 0), 2),
+            "total_value": round(float(state.get("pusd") or 0) + float(state.get("positions_value") or 0), 2),
+        }
+    except Exception:
+        pass
+
+async def _poll_activity():
+    while True:
+        await asyncio.get_event_loop().run_in_executor(None, _read_activity)
+        await asyncio.sleep(45)
 
 # ─── Reward-program metrics (the Polymarket "Rewards" page, per market) ────────
 # max_spread, min_size, $/day rate, competition (market_competitiveness),
@@ -368,6 +454,7 @@ def _read_earnings_history():
         today = _dtmod.date.today()
         start = max(EARN_START, today - _dtmod.timedelta(days=90))
         hist, cum = [], 0.0
+        by_market = {}
         d = start
         while d <= today:
             iso = d.isoformat()
@@ -375,10 +462,22 @@ def _read_earnings_history():
                 rows = c.get_earnings_for_user_for_day(iso) or []
                 day_earn = sum(float(x.get("earnings", 0) or 0) for x in rows)
             except Exception:
-                day_earn = 0.0
+                rows, day_earn = [], 0.0
+            if d == today:
+                # which market(s) paid today — resolve condition_id -> name
+                for x in rows:
+                    cond = x.get("condition_id") or x.get("market") or ""
+                    earn = float(x.get("earnings", 0) or 0)
+                    if cond not in by_market:
+                        by_market[cond] = 0.0
+                    by_market[cond] += earn
             cum += day_earn
             hist.append({"date": iso, "day": round(day_earn, 4), "cum": round(cum, 4)})
             d += _dtmod.timedelta(days=1)
+        breakdown = [{"cond": k, "name": _cond_name(k) or ("…" + str(k)[-6:]),
+                      "earn": round(v, 4)} for k, v in by_market.items()]
+        breakdown.sort(key=lambda r: -r["earn"])
+        state["earnings_by_market"] = breakdown
         state["earnings_history"] = hist
         state["earnings_alltime"] = round(cum, 4)
         state["earnings_hist_ts"] = datetime.now(timezone.utc).isoformat()
@@ -451,6 +550,16 @@ def _read_screener():
             r.setdefault("exit_score", round(r["rate_day"] * 0.02, 3))  # unprobed → sink
             r.setdefault("exit_label", "?"); r.setdefault("spread_c", None)
             r.setdefault("depth", None); r.setdefault("best_bid", None); r.setdefault("best_ask", None)
+            # two-sided affordability: capital to rest min_size on BOTH legs at once.
+            # cost ≈ min_size × (yes_price + no_price)  (≈ min_size since yes+no≈$1).
+            # This is THE filter for small capital: can we even qualify for rewards here?
+            try:
+                msz = float(r.get("min_size") or 0)
+                yp, np_ = r.get("yes_price"), r.get("no_price")
+                r["two_sided_cost"] = (round(msz * (float(yp) + float(np_)), 2)
+                                       if msz and yp is not None and np_ is not None else None)
+            except Exception:
+                r["two_sided_cost"] = None
         rows.sort(key=lambda r: r["exit_score"], reverse=True)
         global _SCREENER_ALL
         _SCREENER_ALL = rows
@@ -871,6 +980,9 @@ def _build_payload() -> Dict:
         "pnl_hist":        list(state["pnl_hist"]),
         "earnings_history":state["earnings_history"],
         "earnings_alltime":state["earnings_alltime"],
+        "earnings_by_market": state["earnings_by_market"],
+        "activity":        state["activity"],
+        "pnl_summary":     state["pnl_summary"],
         "port_hist":       list(state["port_hist"]),
         "markets":         markets_out,
         "risk":            risk,
@@ -887,6 +999,7 @@ async def startup():
     asyncio.create_task(_poll_wallet())
     asyncio.create_task(_poll_orders())
     asyncio.create_task(_poll_positions())
+    asyncio.create_task(_poll_activity())
     asyncio.create_task(_poll_rewards())
     asyncio.create_task(_poll_earnings_history())
     asyncio.create_task(_poll_screener())
@@ -1017,6 +1130,17 @@ async def search(q: str = ""):
     res = [r for r in _SCREENER_ALL if q in (r.get("question") or "").lower()]
     res.sort(key=lambda r: r["rate_day"], reverse=True)
     return res[:80]
+
+@app.get("/watchrows")
+async def watchrows(conds: str = ""):
+    """Return full screener rows for a comma-separated list of condition_ids (read-only).
+    Powers the watchlist: the browser stores starred condition_ids, this resolves their
+    live data from the processed reward-market universe (so stars outside the top-60 work)."""
+    want = [c.strip().lower() for c in (conds or "").split(",") if c.strip()]
+    if not want:
+        return []
+    by_cond = {str(r.get("condition_id", "")).lower(): r for r in _SCREENER_ALL}
+    return [by_cond[c] for c in want if c in by_cond]
 
 @app.post("/control/mm_start")
 async def control_mm_start(req: Request):
