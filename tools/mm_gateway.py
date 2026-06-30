@@ -13,6 +13,15 @@ Safety rails: hard caps (size, per-order + total notional, open-order count),
 cancel-all on start, cancel-all on exit / SIGINT / SIGTERM, and a dead-man's
 switch that cancels everything if market data goes stale.
 
+Automated fill-handling (--fill-handling, OFF by default): when a fill legs us
+(we hold one side, not a hedged set) the bot's default is to COMPLETE THE HEDGE
+(keep quoting the other side, hold the leg, rewards cushion the wait). Around that
+it runs a safety state machine — SCRATCH (exit flat if the leg moved favourably),
+STOP (cut a bleeding leg), DTE-FLATTEN (don't carry an un-hedged leg into
+resolution) — flattening with a marketable FAK at the bid. A complete (hedged) set
+is risk-free and is never touched. Exits are double-gated: --fill-handling enables
+the *logic*, --arm-exits enables actually *placing* the SELLs (else log-only).
+
 Signs with sigType 3 via py-clob-client-v2 (funder = deposit wallet). The L2 API
 key is the EOA-bound one in /home/ubuntu/.pm_creds.env. Key/creds never printed.
 
@@ -62,6 +71,26 @@ class Caps:
 
 
 @dataclass
+class FillPolicy:
+    """Automated handling of a *legged* fill (we hold one side, not a hedged set).
+
+    Default behaviour when legged = COMPLETE THE HEDGE: keep quoting the OTHER side and
+    hold the leg (ongoing LP rewards cushion the wait) — the proven play (it locked the
+    rials set +$0.80 risk-free). These thresholds define the SAFETY band around that:
+    outside the band we flatten the leg with a marketable FAK at the bid. The middle band
+    [fill−stop_loss, fill+scratch_target] is "hold & complete the hedge".
+
+    Off by default; even when enabled, exits are only PLACED with --arm-exits (a second
+    gate, because selling inventory is higher-stakes than resting a bid). Tune the numbers
+    against logs/fill_telemetry.csv mark-outs once live in a GOOD-exit market.
+    """
+    enabled: bool = False          # master switch (default OFF → plain skew behaviour)
+    scratch_target: float = 0.10   # bid ≥ fill+this → take the favourable exit, go flat
+    stop_loss: float = 0.12        # bid ≤ fill−this → cut the loss, go flat
+    dte_flatten_days: int = 1      # DTE ≤ this → flatten any un-hedged leg (binary risk)
+
+
+@dataclass
 class Market:
     name: str
     yes: str
@@ -73,28 +102,60 @@ def log(msg):
 
 
 class Gateway:
-    def __init__(self, client, markets, caps: Caps, live: bool, skew: bool = True):
+    def __init__(self, client, markets, caps: Caps, live: bool, skew: bool = True,
+                 fill: "FillPolicy" = None, arm_exits: bool = False):
         self.c = client
         self.markets = markets
         self.caps = caps
         self.live = live
         self.skew = skew            # don't add to a side we already hold inventory in
+        self.fill = fill or FillPolicy()
+        self.arm_exits = arm_exits  # 2nd gate: actually PLACE exit (SELL) orders
         self.last_md_ok = time.time()
         self.last_mid = {}          # token_id -> last mid we quoted around
         self._flattened = False
 
-    def held_tokens(self):
-        """Tokens we currently hold inventory in (asset_id -> size), via data-api."""
-        if not self.skew:
-            return {}
+    def positions(self):
+        """Inventory we hold, keyed by asset_id: {size, avg, end (ISO), cond}. data-api."""
         try:
             url = f"https://data-api.polymarket.com/positions?user={DEPOSIT_WALLET}"
             req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
             data = json.loads(urllib.request.urlopen(req, timeout=8).read())
-            return {p.get("asset"): float(p.get("size", 0) or 0)
-                    for p in (data or []) if float(p.get("size", 0) or 0) > 0.5}
+            out = {}
+            for p in (data or []):
+                sz = float(p.get("size", 0) or 0)
+                if sz <= 0.5:
+                    continue
+                out[p.get("asset")] = {"size": sz, "avg": float(p.get("avgPrice") or 0),
+                                       "end": p.get("endDate"), "cond": p.get("conditionId")}
+            return out
         except Exception:
             return {}
+
+    def bbo(self, token):
+        """Best bid / best ask for a token (where we could SELL / BUY). (None,None) on err."""
+        try:
+            b = self.c.get_order_book(token)
+            bids = b["bids"] if isinstance(b, dict) else b.bids
+            asks = b["asks"] if isinstance(b, dict) else b.asks
+            g = lambda x: float(x["price"]) if isinstance(x, dict) else float(x.price)
+            bb = max((g(x) for x in bids), default=None)
+            ba = min((g(x) for x in asks), default=None)
+            return bb, ba
+        except Exception:
+            return None, None
+
+    @staticmethod
+    def dte_of(pos):
+        end = pos.get("end")
+        if not end:
+            return None
+        try:
+            import datetime as _dt
+            e = _dt.datetime.fromisoformat(str(end).replace("Z", "+00:00"))
+            return (e - _dt.datetime.now(_dt.timezone.utc)).days
+        except Exception:
+            return None
 
     # ---- safety ----------------------------------------------------------
     def flatten(self, reason=""):
@@ -125,6 +186,48 @@ class Gateway:
         m = self.c.get_midpoint(token)
         return float(m["mid"]) if isinstance(m, dict) else float(m)
 
+    # ---- quote / exit builders ------------------------------------------
+    def _quote_for(self, token):
+        """Post-only BUY quote dict for a token, or None on md error / too-low bid."""
+        mid = self.mid(token)
+        tick = float(self.c.get_tick_size(token))
+        bid = self.round_tick(mid - self.caps.half_spread, tick)
+        if bid < tick:
+            return None
+        return {"token": token, "side": "BUY", "price": bid, "size": self.caps.size,
+                "tick": tick, "kind": "quote", "reason": "two-sided"}
+
+    def _exit_for(self, token, pos):
+        """Decide whether to flatten a legged inventory token. Returns a marketable-SELL
+        exit dict (kind='exit'), or None to HOLD the leg (complete-the-hedge / cushion).
+
+        State machine, in priority order:
+          DTE     — close to resolution → flatten (don't carry binary risk)
+          STOP    — bid ≤ fill − stop_loss → cut the loss
+          SCRATCH — bid ≥ fill + scratch_target → take the favourable exit, go flat
+          (else)  — HOLD: stay in the [fill−stop, fill+scratch] band, keep the hedge alive
+        """
+        fp = self.fill
+        bid, _ = self.bbo(token)
+        if bid is None:
+            return None
+        tick = float(self.c.get_tick_size(token))
+        fill = float(pos.get("avg") or 0)
+        size = float(pos.get("size") or 0)
+        dte = self.dte_of(pos)
+        markout = bid - fill
+        px = self.round_tick(bid, tick)                 # sell into the touch (FAK)
+        if dte is not None and dte <= fp.dte_flatten_days:
+            why = f"DTE {dte}d ≤ {fp.dte_flatten_days}: flatten leg (bid {bid:.2f} / fill {fill:.2f})"
+        elif markout <= -fp.stop_loss:
+            why = f"STOP: bid {bid:.2f} ≤ fill {fill:.2f}−{fp.stop_loss:.2f} (markout {markout:+.2f})"
+        elif markout >= fp.scratch_target:
+            why = f"SCRATCH: bid {bid:.2f} ≥ fill {fill:.2f}+{fp.scratch_target:.2f} (markout {markout:+.2f})"
+        else:
+            return None                                  # HOLD
+        return {"token": token, "side": "SELL", "price": px, "size": size,
+                "tick": tick, "kind": "exit", "reason": why}
+
     # ---- one quoting cycle ----------------------------------------------
     def cycle(self):
         caps = self.caps
@@ -140,74 +243,105 @@ class Gateway:
             return  # md error already logged; DMS will trip if it persists
         total_notional = sum(float(o["price"]) * float(o["original_size"]) for o in live_orders)
 
-        held = self.held_tokens()      # inventory skew: never add to a side we hold
-        desired = []   # (token, side, price, size)
+        pos = self.positions()         # inventory: drives skew AND fill-handling
+        desired = []                   # list of order dicts (kind: quote | exit)
         for mk in self.markets:
+            hy = (pos.get(mk.yes) or {}).get("size", 0.0)
+            hn = (pos.get(mk.no) or {}).get("size", 0.0)
+            # A complete (hedged) set is risk-free locked profit — the MM never touches it.
+            if hy > 0.5 and hn > 0.5:
+                log(f"{mk.name}: hedged set held (YES {hy:.0f} / NO {hn:.0f}) — no action")
+                continue
+            # which side, if any, is the legged (single-sided) inventory
+            leg = (mk.yes, pos[mk.yes], mk.no) if hy > 0.5 else \
+                  (mk.no, pos[mk.no], mk.yes) if hn > 0.5 else None
             try:
-                for token in (mk.yes, mk.no):
-                    if held.get(token, 0) > 0.5:
-                        log(f"skew: hold {held[token]:.0f} of tok…{token[-6:]}, skip its BUY")
-                        continue
-                    mid = self.mid(token)
-                    tick = float(self.c.get_tick_size(token))
-                    bid = self.round_tick(mid - caps.half_spread, tick)
-                    if bid < tick:
-                        continue
-                    desired.append((token, "BUY", bid, caps.size, tick))
+                if leg is None:                                  # flat → quote both sides
+                    for token in (mk.yes, mk.no):
+                        q = self._quote_for(token)
+                        if q: desired.append(q)
+                else:
+                    leg_token, leg_pos, other = leg
+                    ex = self._exit_for(leg_token, leg_pos) if self.fill.enabled else None
+                    if ex is not None:                           # flatten the leg, pause the hedge
+                        desired.append(ex)
+                        log(f"{mk.name}: {ex['reason']} → flatten leg, pause other-side quote")
+                    else:                                        # hold leg, complete the hedge
+                        log(f"skew: hold {leg_pos['size']:.0f} tok…{leg_token[-6:]} (leg) — "
+                            f"quoting other side to complete hedge")
+                        q = self._quote_for(other)
+                        if q: desired.append(q)
+                        if not self.skew:                        # --no-skew → also re-quote the leg
+                            q2 = self._quote_for(leg_token)
+                            if q2: desired.append(q2)
                 self.last_md_ok = time.time()
             except Exception as e:
                 log(f"md error {mk.name}: {e!r}")
                 continue
 
-        # 3) decide whether to re-quote: only if mid moved enough or nothing live
-        need = not live_orders
-        for token, _, price, _, _ in desired:
-            prev = self.last_mid.get(token)
-            if prev is None or abs(price - prev) >= caps.requote_move:
+        buys = [d for d in desired if d["side"] == "BUY"]
+        exits = [d for d in desired if d["side"] == "SELL"]
+
+        # 3) caps apply to BUY exposure only — exits REDUCE risk and must never be blocked
+        if any(d["price"] * d["size"] > caps.max_order_notional for d in buys):
+            log("SKIP buys: an order exceeds max_order_notional"); buys = []
+        buy_notional = sum(d["price"] * d["size"] for d in buys)
+        if buy_notional > caps.max_total_notional:
+            log(f"SKIP buys: total ${buy_notional:.2f} > cap ${caps.max_total_notional}"); buys = []
+        if len(buys) > caps.max_open_orders:
+            log(f"SKIP buys: {len(buys)} > max_open_orders"); buys = []
+        place = exits + buys
+
+        # 4) re-quote only if needed: a fresh exit, nothing live, or a buy moved enough
+        need = (not live_orders) or bool(exits)
+        for d in buys:
+            prev = self.last_mid.get(d["token"])
+            if prev is None or abs(d["price"] - prev) >= caps.requote_move:
                 need = True
         if not need:
             log(f"hold: {len(live_orders)} live, ${total_notional:.2f} notional")
             return
 
-        # 4) cap checks
-        new_notional = sum(p * s for _, _, p, s, _ in desired)
-        if any(p * s > caps.max_order_notional for _, _, p, s, _ in desired):
-            log("SKIP: an order exceeds max_order_notional"); return
-        if new_notional > caps.max_total_notional:
-            log(f"SKIP: total notional ${new_notional:.2f} > cap ${caps.max_total_notional}"); return
-        if len(desired) > caps.max_open_orders:
-            log(f"SKIP: {len(desired)} orders > max_open_orders"); return
-
-        # 5) replace: cancel all, then place the fresh quotes
-        log(f"re-quote: cancelling {len(live_orders)} and placing {len(desired)} "
-            f"(${new_notional:.2f} notional)")
+        # 5) replace: cancel resting orders, then place exits (FAK) + fresh quotes (GTD)
+        log(f"re-quote: cancel {len(live_orders)}, place {len(exits)} exit / {len(buys)} quote "
+            f"(${buy_notional:.2f} buy notional)")
         if self.live and live_orders:
             try: self.c.cancel_all()
             except Exception as e: log(f"cancel_all ERROR {e!r}")
 
-        for token, side, price, size, tick in desired:
-            tag = f"{side} {size}@{price:.2f} tok…{token[-6:]}"
+        for d in place:
+            token, side, price, size, kind = d["token"], d["side"], d["price"], d["size"], d["kind"]
+            tag = f"{side} {size}@{price:.2f} tok…{token[-6:]} [{kind}]"
             if not self.live:
-                log(f"  DRY  {tag}"); continue
+                log(f"  DRY  {tag}  ({d['reason']})"); continue
+            if side == "SELL" and not self.arm_exits:        # 2nd gate on real liquidation
+                log(f"  (exit not armed — would: {tag})  ({d['reason']})"); continue
             try:
                 neg = self.c.get_neg_risk(token)
                 ts = self.c.get_tick_size(token)
-                # GTD: the order auto-expires after gtd_expiry seconds. If this
-                # process (or the whole box) dies, resting orders die with it
-                # within ~gtd_expiry — they can never sit naked overnight again.
-                exp = int(time.time() + self.caps.gtd_expiry)
-                resp = self.c.create_and_post_order(
-                    OrderArgsV2(token_id=token, price=price, size=size, side=side,
-                                expiration=exp),
-                    options=PartialCreateOrderOptions(tick_size=ts, neg_risk=neg),
-                    order_type=OrderType.GTD, post_only=True)
+                if kind == "exit":
+                    # marketable: fill what we can at the bid now, kill the rest (no resting)
+                    resp = self.c.create_and_post_order(
+                        OrderArgsV2(token_id=token, price=price, size=size, side=side),
+                        options=PartialCreateOrderOptions(tick_size=ts, neg_risk=neg),
+                        order_type=OrderType.FAK, post_only=False)
+                else:
+                    # GTD: auto-expires after gtd_expiry s if the process/box dies →
+                    # resting quotes can never sit naked overnight again.
+                    exp = int(time.time() + self.caps.gtd_expiry)
+                    resp = self.c.create_and_post_order(
+                        OrderArgsV2(token_id=token, price=price, size=size, side=side,
+                                    expiration=exp),
+                        options=PartialCreateOrderOptions(tick_size=ts, neg_risk=neg),
+                        order_type=OrderType.GTD, post_only=True)
                 ok = isinstance(resp, dict) and resp.get("success")
                 log(f"  {'OK ' if ok else 'ERR'} {tag} -> {resp}")
             except Exception as e:
                 log(f"  ERR {tag} -> {e!r}")
-            self.last_mid[token] = price
+            if side == "BUY":
+                self.last_mid[token] = price
 
-        self.write_status(live_orders, new_notional)
+        self.write_status(live_orders, buy_notional)
 
     def write_status(self, live_orders, notional):
         try:
@@ -243,6 +377,17 @@ def main():
     ap.add_argument("--duration", type=float, default=0.0, help="auto stop+flatten after N s (0=forever)")
     ap.add_argument("--live", action="store_true", help="actually place orders (default: dry-run)")
     ap.add_argument("--no-skew", action="store_true", help="disable inventory skew (allow adding to held sides)")
+    # automated fill-handling (legged-fill state machine). OFF by default; exits double-gated.
+    ap.add_argument("--fill-handling", action="store_true",
+                    help="enable scratch/stop/DTE-flatten logic on legged fills (default OFF)")
+    ap.add_argument("--arm-exits", action="store_true",
+                    help="actually PLACE exit (SELL) orders — 2nd gate; needs --live + --fill-handling")
+    ap.add_argument("--scratch-target", type=float, default=0.10,
+                    help="bid ≥ fill+this → take the favourable exit, go flat")
+    ap.add_argument("--stop-loss", type=float, default=0.12,
+                    help="bid ≤ fill−this → cut the loss, go flat")
+    ap.add_argument("--dte-flatten-days", type=int, default=1,
+                    help="flatten any un-hedged leg when days-to-resolution ≤ this")
     a = ap.parse_args()
 
     env = read_env(CREDS_FILE)
@@ -259,8 +404,16 @@ def main():
         f"markets={[m.name for m in markets]} | size={caps.size} hs={caps.half_spread} "
         f"GTD={caps.gtd_expiry:.0f}s | caps: order≤${caps.max_order_notional} total≤${caps.max_total_notional}")
 
-    gw = Gateway(client, markets, caps, a.live, skew=not a.no_skew)
+    fill = FillPolicy(enabled=a.fill_handling, scratch_target=a.scratch_target,
+                      stop_loss=a.stop_loss, dte_flatten_days=a.dte_flatten_days)
+    gw = Gateway(client, markets, caps, a.live, skew=not a.no_skew,
+                 fill=fill, arm_exits=a.arm_exits)
     log(f"inventory skew: {'ON' if gw.skew else 'OFF'}")
+    if fill.enabled:
+        log(f"fill-handling: ON (scratch≥fill+{fill.scratch_target} · stop≤fill−{fill.stop_loss} · "
+            f"DTE≤{fill.dte_flatten_days}d) · exits {'ARMED' if a.arm_exits else 'NOT armed (log-only)'}")
+    else:
+        log("fill-handling: OFF (plain skew — hold leg, quote other side)")
     # cancel-all on every exit path
     atexit.register(lambda: gw.flatten("exit") if a.live else None)
     for sig in (signal.SIGINT, signal.SIGTERM):

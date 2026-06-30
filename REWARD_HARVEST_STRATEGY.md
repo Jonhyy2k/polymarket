@@ -292,9 +292,19 @@ Two instruments are live; one piece (automated fill-handling) is the next build.
    deposit-wallet fills and samples the mid at **+1m / +5m / +15m**, writing a signed
    **mark-out** per fill to `logs/fill_telemetry.csv` (`> 0` favourable, `< 0` = adverse
    selection). This is the dataset that answers the §12 go/no-go: rewards vs adverse bleed.
-3. **Automated fill-handling (next).** Inventory **skew** (stop quoting the filled side) →
-   **fast scratch** (exit at ≥ fill) → **stop-loss** → **DTE flatten**, gated off by default
-   and dry-runnable. Pairs with the first measured live pilot in a GOOD-exit market.
+3. **Automated fill-handling (shipped 2026-06-30).** `tools/mm_gateway.py` now runs a
+   legged-fill state machine: **skew** (hold the leg) → default **complete-the-hedge**
+   (keep quoting the other side, rewards cushion the wait) → **SCRATCH** (bid ≥ fill +
+   `scratch_target` → take the favourable exit) → **STOP** (bid ≤ fill − `stop_loss` → cut)
+   → **DTE-FLATTEN** (DTE ≤ `dte_flatten_days` → don't carry an un-hedged leg into
+   resolution). A complete **hedged set is detected and never touched** (protects locked
+   risk-free profit). Exits flatten with a marketable **FAK at the bid**. **Off by default**
+   and **double-gated**: `--fill-handling` enables the *logic* (log-only), `--arm-exits`
+   enables actually placing the SELLs. Defaults `scratch 0.10 / stop 0.12 / DTE 1d` are
+   conservative starting points — **tune against `logs/fill_telemetry.csv` mark-outs.**
+   Unit-tested (state machine) + dry-run verified (hedged set skipped, flat market quotes
+   two-sided). Arming sequence for the Hormuz pilot: `--fill-handling` first (watch the
+   log-only decisions for a session), then add `--arm-exits` once the thresholds look right.
 
 ## 15. Pilot-2 outcome + the affordability filter (2026-06-30)
 
